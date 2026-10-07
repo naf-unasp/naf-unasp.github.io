@@ -536,7 +536,7 @@ VIEWS.ponto = async () => {
     <input id="bp" placeholder="Buscar" style="width:180px"><button class="btn" id="lote">Selecionar vários</button></div>
     <div id="barra" class="row" style="margin-top:10px;display:none;background:#eef2f7;padding:10px;border-radius:10px">
       <b id="nsel">0 selecionado(s)</b><button class="btn sm" id="todos">Marcar todos</button><span class="grow"></span>
-      ${turno ? `<button class="btn sm primary" id="lt">+${h1(turno)}h turno</button>` : '<button class="btn sm ok" id="le">Registrar entrada</button><button class="btn sm bad" id="ls">Registrar saída</button>'}
+      <button class="btn sm ok" id="le">Registrar entrada</button><button class="btn sm bad" id="ls">Registrar saída</button>${turno ? `<button class="btn sm primary" id="lt">+${h1(turno)}h turno</button>` : ''}
     </div>
     <div class="alunos-ponto" id="lap" style="margin-top:12px"></div></div>`;
   const render = () => {
@@ -546,8 +546,8 @@ VIEWS.ponto = async () => {
       return `<div class="ap ${dentro ? 'dentro' : ''}" ${modoLote ? `data-s="${a.id}" style="cursor:pointer"` : ''}>
         <div class="row" style="margin:0">${modoLote ? `<input type="checkbox" style="width:auto" ${sel.has(a.id) ? 'checked' : ''}>` : ''}<div class="n grow">${esc(a.nome)}</div></div>
         <div class="muted small">RA ${esc(a.ra)}${u ? ` · ${u.tipo === 'entrada' ? 'entrou' : 'saiu'} às ${hora(u.ts)}` : ''} · mês ${sinal(sal[a.id])}</div>
-        ${modoLote ? '' : `<div class="row">${turno ? `<button class="btn sm primary" data-t="${a.id}">+${h1(turno)}h turno</button>`
-          : `<button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>`}
+        ${modoLote ? '' : `<div class="row"><button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>
+          ${turno ? `<button class="btn sm" data-t="${a.id}">+${h1(turno)}h turno</button>` : ''}
           <button class="btn sm" data-cal="${a.id}">Calendário</button></div>`}</div>`;
     }).join('') || '<div class="muted">Nenhum aluno.</div>';
     document.getElementById('nsel').textContent = `${sel.size} selecionado(s)`;
@@ -1025,7 +1025,7 @@ VIEWS.meu = async () => {
   const peds = await q(sb.from('pedidos').select('*').order('criado_em', { ascending: false }).limit(10));
   const st = { aguardando: ['Aguardando', 'warn'], aprovado: ['Aprovado', 'ok'], recusado: ['Recusado', 'bad'] };
   document.getElementById('main').innerHTML = `
-  ${setor.modo_ponto === 'aluno' && !setor.turno_fixo_horas ? '<div class="card"><button class="btn primary block" style="margin:0" id="bater">Registrar presença agora</button></div>' : ''}
+  ${setor.modo_ponto === 'aluno' ? '<div class="card"><button class="btn primary block" style="margin:0" id="bater">Registrar presença agora</button></div>' : ''}
   <div id="calbox"></div>
   <div class="split">
     <div class="card"><div class="row"><h2 class="grow">Meus pedidos de ajuste</h2>${setor.turno_fixo_horas ? '' : '<button class="btn sm primary" id="nped">+ Pedir ajuste</button>'}</div>
