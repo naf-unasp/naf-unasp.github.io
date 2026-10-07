@@ -52,6 +52,8 @@ function vigiarInatividade() {
 async function sair(msg) { await sb.auth.signOut(); S.perfil = null; telaLogin(msg); }
 
 async function iniciar() {
+  const convite = new URLSearchParams(location.search).get('convite');
+  if (convite) return telaConvite(convite);
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return telaLogin();
   const perfil = (await q(sb.from('perfis').select('*').eq('user_id', session.user.id)))[0];
@@ -94,6 +96,77 @@ function telaLogin(msg = '') {
     if (error) { document.getElementById('e').textContent = 'RA/e-mail ou senha incorretos.'; return; }
     iniciar();
   };
+}
+
+// ---------- Link de convite: aluno cria o próprio acesso ----------
+async function chamarConvite(corpo) {
+  const { data, error } = await sb.functions.invoke('convite', { body: corpo });
+  let msg = data?.erro;
+  if (error && !msg) { try { msg = (await error.context.json()).erro; } catch { msg = 'Não foi possível conectar. Tente novamente.'; } }
+  return msg ? { erro: msg } : data;
+}
+async function telaConvite(token) {
+  history.replaceState(null, '', location.pathname);   // tira o código da barra de endereço
+  await sb.auth.signOut().catch(() => {});
+  $app.innerHTML = '<div class="center muted">Verificando seu link…</div>';
+  const info = await chamarConvite({ acao: 'ver', token });
+  if (info.erro) { telaLogin(info.erro); return; }
+  $app.innerHTML = `
+  <div class="center"><form class="login" id="f">
+    <div class="logo">AE</div><h1>Crie seu acesso</h1>
+    <div class="muted small">Atividade Educativa · UNASP</div>
+    <label>Nome</label><input value="${esc(info.nome)}" disabled>
+    <label>RA (será seu login)</label><input value="${esc(info.ra)}" disabled autocomplete="username">
+    <label for="n1">Crie uma senha (mínimo 8 caracteres)</label><input id="n1" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="n2">Repita a senha</label><input id="n2" type="password" autocomplete="new-password" minlength="8" required>
+    <button class="btn primary block" id="b">Criar acesso e entrar</button><div class="err" id="e"></div>
+    <div class="muted small" style="margin-top:8px">Este link é pessoal e só funciona uma vez.</div>
+  </form></div>`;
+  document.getElementById('f').onsubmit = async ev => {
+    ev.preventDefault();
+    const a = document.getElementById('n1').value, b = document.getElementById('n2').value, e = document.getElementById('e');
+    if (a.length < 8) return (e.textContent = 'A senha precisa ter pelo menos 8 caracteres.');
+    if (a !== b) return (e.textContent = 'As senhas não conferem.');
+    const bt = document.getElementById('b'); bt.disabled = true;
+    const r = await chamarConvite({ acao: 'criar', token, senha: a });
+    if (r.erro) { bt.disabled = false; e.textContent = r.erro; return; }
+    const { error } = await sb.auth.signInWithPassword({ email: `ra-${String(r.ra).replace(/\D/g, '')}@${RA_DOMINIO}`, password: a });
+    if (error) return telaLogin('Acesso criado! Entre com seu RA e a senha que você criou.');
+    toast('Acesso criado. Bem-vindo(a)!'); iniciar();
+  };
+}
+const linkConvite = t => `${location.origin}${location.pathname}?convite=${t}`;
+function painelLink(el, aluno) {
+  el.innerHTML = `<div class="muted small">Gera um link pessoal para o aluno criar a própria senha. O nome e o RA aparecem preenchidos. Vale 7 dias e funciona uma vez; gerar outro cancela o anterior.</div>
+    <button class="btn" id="gl" style="margin-top:8px">Gerar link de acesso</button><div id="lk"></div>`;
+  el.querySelector('#gl').onclick = async () => {
+    const t = await q(sb.rpc('gerar_convite', { p_aluno: aluno.id }));
+    const lk = el.querySelector('#lk');
+    if (!t) { lk.innerHTML = '<div class="tag ok" style="margin-top:8px">Este aluno já tem acesso.</div>'; return; }
+    const url = linkConvite(t);
+    const msg = `Olá, ${aluno.nome.split(' ')[0]}! Crie seu acesso à Atividade Educativa do UNASP por este link (vale 7 dias): ${url}`;
+    lk.innerHTML = `<div class="row" style="margin-top:8px"><input class="grow" value="${esc(url)}" readonly id="lu">
+      <button class="btn" id="cp">Copiar</button><a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}">WhatsApp</a></div>`;
+    lk.querySelector('#cp').onclick = async () => { await navigator.clipboard.writeText(msg); toast('Mensagem com o link copiada.'); };
+  };
+}
+async function linksEmLote(lista) {
+  if (!lista.length) return toast('Nenhum aluno na lista.', true);
+  if (lista.length > 150) return toast('Filtre a lista para no máximo 150 alunos.', true);
+  if (!confirm(`Gerar links de acesso para ${lista.length} aluno(s)? Links anteriores ainda não usados serão substituídos.`)) return;
+  toast('Gerando links…');
+  const linhas = []; let jaTem = 0;
+  for (const s of lista) {
+    try { const t = await q(sb.rpc('gerar_convite', { p_aluno: s.aluno_id })); if (t) linhas.push(`${s.nome} (RA ${s.ra}): ${linkConvite(t)}`); else jaTem++; } catch {}
+  }
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="drawer"><button class="btn sm close" id="x">Fechar</button><h2>Links de acesso</h2>
+    <div class="muted small">${linhas.length} link(s) gerado(s)${jaTem ? ` · ${jaTem} aluno(s) já tinham acesso` : ''}. Cada link é pessoal, vale 7 dias e funciona uma vez.</div>
+    <textarea rows="16" style="margin-top:10px;font-size:13px" readonly id="tl">${esc(linhas.join('\n'))}</textarea>
+    <button class="btn primary block" id="cp">Copiar todos</button></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#x').onclick = () => ov.remove();
+  ov.querySelector('#cp').onclick = async () => { await navigator.clipboard.writeText(linhas.join('\n')); toast('Links copiados.'); };
 }
 
 function telaTrocaSenha() {
@@ -208,7 +281,7 @@ VIEWS.alunos = async () => {
       <input class="grow" id="busca" placeholder="Buscar por nome ou RA">
       <select id="fs" style="width:auto;max-width:260px">${optsSetor('', 'Todos os setores')}</select>
       <select id="fsal" style="width:auto"><option value="">Todos</option><option value="dev">Com horas pendentes</option><option value="sob">Com horas sobrando</option></select>
-      <button class="btn" id="xls">Exportar Excel</button>
+      <button class="btn" id="xls">Exportar Excel</button><button class="btn" id="lks">Links de acesso</button>
     </div>
     <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num">Previsto</th><th class="num">Cumpridas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="muted small" id="cont" style="margin-top:8px"></div>
@@ -231,6 +304,7 @@ VIEWS.alunos = async () => {
   filtrar();
   if (naf) document.getElementById('novo').onclick = () => abrirAluno(null);
   document.getElementById('xls').onclick = () => exportarExcel(S._lista);
+  document.getElementById('lks').onclick = () => linksEmLote(S._lista);
 };
 
 // ---------- Ficha do aluno (drawer) ----------
@@ -272,6 +346,7 @@ async function abrirAluno(id) {
       ${trans.length ? `<div class="muted small" style="margin-top:8px">${trans.map(t => `${dataHora(t.em)}: ${esc(nomeSetor(t.de_setor))} → ${esc(nomeSetor(t.para_setor))}`).join('<br>')}</div>` : ''}
       <hr><h3>Acesso do aluno</h3><div id="acesso" class="muted small">Verificando…</div>
       <hr><h3>PIN do quiosque</h3><div class="row"><input id="pin" class="grow" inputmode="numeric" maxlength="6" placeholder="4 a 6 números"><button class="btn" id="pbt">Definir PIN</button></div>` : ''}
+    ${id && S.perfil.papel !== 'aluno' && a.ativo ? `<hr><h3>Link de acesso do aluno</h3><div id="plink"></div>` : ''}
     ${id ? `<hr><h3>Dias combinados de atividade</h3><div id="dias"></div>` : ''}
     ${id ? `<hr><h3>Últimos registros</h3>${regs.length ? `<table><tbody>${regs.map(r => `<tr><td>${dataHora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td><td class="muted small">${esc(r.origem)}</td><td>${r.cancelado ? '<span class="tag bad">cancelado</span>' : `<button class="btn sm" data-c="${r.id}">Cancelar</button>`}</td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro.</div>'}` : ''}
   </div>`;
@@ -291,6 +366,7 @@ async function abrirAluno(id) {
   };
   const vcal = ov.querySelector('#vcal');
   if (vcal) vcal.onclick = () => { S.calAluno = id; fechar(); ir('calendario'); };
+  const pl = ov.querySelector('#plink'); if (pl) painelLink(pl, a);
   const dz = ov.querySelector('#dias');
   if (dz) editorDias(dz, a, naf || S.perfil.papel === 'lider');
   const tbt = ov.querySelector('#tbt');
