@@ -5,7 +5,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 const SUPABASE_URL = 'https://rikfolktwyaqkuehalqc.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpa2ZvbGt0d3lhcWt1ZWhhbHFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMjkyNDIsImV4cCI6MjEwNjkwNTI0Mn0.n5CsL4JvxE4_wEzX_HDWNZW7ck2fRw7RVKFjxFV2lHo';
 const RA_DOMINIO = 'aluno.te-unasp.app';
-const INATIVIDADE_MIN = 30; // sai sozinho após 30 min parado
+const INATIVIDADE_MIN = 30; // bloqueia a tela após 30 min parado (pede só a senha para voltar)
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 const $app = document.getElementById('app');
@@ -45,9 +45,45 @@ const optsSetor = (sel, vazio, todos) => (vazio ? `<option value="">${vazio}</op
 // ---------- sessão ----------
 let inativo;
 function vigiarInatividade() {
-  const reset = () => { clearTimeout(inativo); inativo = setTimeout(() => sair('Sessão encerrada por inatividade.'), INATIVIDADE_MIN * 60000); };
+  if (vigiarInatividade.ligado) return; vigiarInatividade.ligado = true;
+  const reset = () => {
+    if (document.getElementById('bloqueio')) return;
+    clearTimeout(inativo);
+    inativo = setTimeout(() => { if (S.perfil && !S.quiosque) bloquearTela(); else reset(); }, INATIVIDADE_MIN * 60000);
+  };
   ['click', 'keydown', 'touchstart'].forEach(e => document.addEventListener(e, reset, { passive: true }));
   reset();
+}
+// Confere a senha sem trocar a sessão atual (assim o 2º passo continua valendo)
+async function confereSenha(senha) {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user?.email) return false;
+  const tmp = createClient(SUPABASE_URL, SUPABASE_ANON, { auth: { persistSession: false, autoRefreshToken: false, storageKey: 'ae-verificacao' } });
+  const { error } = await tmp.auth.signInWithPassword({ email: user.email, password: senha });
+  if (!error) await tmp.auth.signOut({ scope: 'local' }).catch(() => {});
+  return !error;
+}
+function bloquearTela() {
+  if (document.getElementById('bloqueio')) return;
+  let erros = 0;
+  const ov = document.createElement('div'); ov.id = 'bloqueio';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:100;background:var(--bg);display:grid;place-items:center;padding:16px';
+  ov.innerHTML = `<form class="login" id="fb"><div class="logo">AE</div><h1>Tela bloqueada</h1>
+    <div class="muted small">${esc(S.perfil?.nome || '')} · bloqueada após ${INATIVIDADE_MIN} minutos sem uso.</div>
+    <label for="bs">Digite sua senha para continuar</label><input id="bs" type="password" autocomplete="current-password" required>
+    <button class="btn primary block" id="bb">Desbloquear</button><div class="err" id="be"></div>
+    <button type="button" class="btn block" id="bx" style="margin-top:8px">Sair</button></form>`;
+  document.body.appendChild(ov);
+  document.getElementById('bs').focus();
+  document.getElementById('bx').onclick = () => { ov.remove(); sair(); };
+  document.getElementById('fb').onsubmit = async e => {
+    e.preventDefault(); const bt = document.getElementById('bb'); bt.disabled = true;
+    const ok = await confereSenha(document.getElementById('bs').value);
+    bt.disabled = false;
+    if (ok) { ov.remove(); clearTimeout(inativo); document.body.click(); return; }
+    if (++erros >= 5) { ov.remove(); return sair('Muitas tentativas. Entre novamente.'); }
+    document.getElementById('be').textContent = 'Senha incorreta.'; document.getElementById('bs').value = '';
+  };
 }
 async function sair(msg) { await sb.auth.signOut(); S.perfil = null; telaLogin(msg); }
 
@@ -820,6 +856,7 @@ async function exportarExcel(lista) {
 
 // ---------- Quiosque ----------
 function quiosque(setor) {
+  S.quiosque = true;
   $app.innerHTML = `<div class="kiosk"><button class="btn sm sair" id="ks">Sair do quiosque</button><div class="box">
     <div class="muted" style="color:#cfdaea">${esc(nomeSetor(setor.id))}</div><div class="clock" id="clk"></div>
     <form id="kf"><input id="kra" placeholder="Seu RA" inputmode="numeric" autocomplete="off" required>
@@ -838,10 +875,9 @@ function quiosque(setor) {
   };
   document.getElementById('ks').onclick = () => {
     const s = prompt('Para sair do quiosque, digite a senha do líder:'); if (!s) return;
-    sb.auth.getUser().then(async ({ data: { user } }) => {
-      const { error } = await sb.auth.signInWithPassword({ email: user.email, password: s });
-      if (error) return toast('Senha incorreta.', true);
-      clearInterval(iv); iniciar();
+    confereSenha(s).then(ok => {
+      if (!ok) return toast('Senha incorreta.', true);
+      clearInterval(iv); S.quiosque = false; ir('ponto');
     });
   };
 }
