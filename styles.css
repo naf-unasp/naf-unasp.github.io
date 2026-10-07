@@ -137,8 +137,11 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}
   h1{font-size:20px} h2{font-size:17px}
   input,select,textarea{font-size:16px;padding:11px 12px}
   .btn{padding:11px 14px} .btn.sm{padding:8px 11px;font-size:13px}
-  .row > .grow{min-width:0;flex-basis:100%}
+  .row > input.grow, .row > select.grow, .row > div.grow{min-width:0;flex-basis:100%}
+  .row > h2.grow, .row > span.grow, .row > b.grow{min-width:0;flex:1}
   .row > select{flex:1}
+  .card .row > input[style*="width"]{width:100% !important;flex:1 1 100%}
+  .card .row > select[style*="max-width"]{max-width:none !important}
   .pend{flex-wrap:wrap}
   .pend .grow{flex-basis:calc(100% - 110px)}
   .pend > .row{width:100%;justify-content:flex-end}
