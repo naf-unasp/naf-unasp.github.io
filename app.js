@@ -290,19 +290,47 @@ const MENUS = {
   lider: [['visao', 'Visão geral'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['calendario', 'Calendário'], ['pedidos', 'Pedidos']],
   aluno: [['meu', 'Meu saldo']],
 };
+const ICONES = {
+  painel: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+  visao: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
+  alunos: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.4 3.6 5.2"/>',
+  ponto: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9"/>',
+  calendario: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  pedidos: '<path d="M4 4h16v12H14l-4 4v-4H4z"/>',
+  setores: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  acessos: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  meu: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
+  mais: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+};
+const icone = k => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONES[k] || ''}</svg>`;
+const ROTULO_CURTO = { ponto: 'Presença', visao: 'Início', painel: 'Painel', meu: 'Meu saldo' };
 function casca(conteudo) {
-  const p = S.perfil;
+  const p = S.perfil; const itens = MENUS[p.papel];
+  const baixo = itens.length <= 5 ? itens : [...itens.slice(0, 4), ['mais', 'Mais']];
+  const extras = itens.length <= 5 ? [] : itens.slice(4);
   $app.innerHTML = `
   <header class="top">
     <div class="name">AE · UNASP</div>
-    <nav>${MENUS[p.papel].map(([k, t]) => `<a href="#" data-v="${k}" class="${S.view === k ? 'on' : ''}">${t}</a>`).join('')}</nav>
+    <nav class="tnav">${itens.map(([k, t]) => `<a href="#" data-v="${k}" class="${S.view === k ? 'on' : ''}">${t}</a>`).join('')}</nav>
     <div class="who"><span>${esc(p.nome)} · ${p.papel.toUpperCase()}</span><button id="sair">Sair</button></div>
-  </header><main id="main">${conteudo}</main>`;
-  $app.querySelectorAll('nav a').forEach(a => a.onclick = e => { e.preventDefault(); ir(a.dataset.v); });
+  </header><main id="main">${conteudo}</main>
+  ${itens.length > 1 ? `<nav class="bnav">${baixo.map(([k, t]) => `<a href="#" data-${k === 'mais' ? 'mais' : 'v'}="${k}" class="${S.view === k || (k === 'mais' && extras.some(([e]) => e === S.view)) ? 'on' : ''}">${icone(k)}<span>${ROTULO_CURTO[k] || t}</span></a>`).join('')}</nav>` : ''}`;
+  $app.querySelectorAll('[data-v]').forEach(a => a.onclick = e => { e.preventDefault(); ir(a.dataset.v); });
   document.getElementById('sair').onclick = () => sair();
+  const mais = $app.querySelector('[data-mais]');
+  if (mais) mais.onclick = e => {
+    e.preventDefault();
+    const ov = document.createElement('div'); ov.className = 'sheet-ov';
+    ov.innerHTML = `<div class="sheet">${extras.map(([k, t]) => `<a href="#" data-x="${k}">${icone(k)}<span>${t}</span></a>`).join('')}
+      <a href="#" data-sair>${icone('meu')}<span>Sair (${esc(p.nome.split(' ')[0])})</span></a></div>`;
+    document.body.appendChild(ov);
+    ov.onclick = ev => { if (ev.target === ov) ov.remove(); };
+    ov.querySelectorAll('[data-x]').forEach(a => a.onclick = ev => { ev.preventDefault(); ov.remove(); ir(a.dataset.x); });
+    ov.querySelector('[data-sair]').onclick = ev => { ev.preventDefault(); ov.remove(); sair(); };
+  };
 }
 const VIEWS = {};
-async function ir(v) { S.view = v; casca('<div class="muted">Carregando…</div>'); try { await VIEWS[v](); } catch (e) { console.error(e); } }
+async function ir(v) { S.view = v; window.scrollTo(0, 0); casca('<div class="muted">Carregando…</div>'); try { await VIEWS[v](); } catch (e) { console.error(e); } }
 
 // ---------- NAF: painel ----------
 VIEWS.painel = async () => {
@@ -363,7 +391,7 @@ VIEWS.alunos = async () => {
       <select id="fsal" style="width:auto"><option value="">Todos</option><option value="dev">Com horas pendentes</option><option value="sob">Com horas sobrando</option></select>
       <button class="btn" id="xls">Exportar Excel</button><button class="btn" id="lks">Links de acesso</button>
     </div>
-    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num">Previsto</th><th class="num">Cumpridas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num hide-m">Previsto</th><th class="num hide-m">Cumpridas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="muted small" id="cont" style="margin-top:8px"></div>
   </div>`;
   const filtrar = () => {
@@ -375,7 +403,7 @@ VIEWS.alunos = async () => {
     document.getElementById('tb').innerHTML = l.slice(0, 400).map(s => `
       <tr class="click" data-a="${s.aluno_id}"><td>${esc(s.nome)}<div class="muted small">${esc(s.ra)}</div></td>
       <td class="hide-m">${esc(nomeSetor(s.setor_id))}</td><td class="hide-m">${esc(s.plano || '—')} <span class="muted small">${h1(s.horas_semana)}h/sem</span></td>
-      <td class="num">${h1(s.meta_mes)}h</td><td class="num">${h1(s.feitas_mes)}h</td><td class="num">${sinal(s.saldo_mes)}</td><td class="num hide-m">${sinal(s.saldo_mes_ant)}</td></tr>`).join('');
+      <td class="num hide-m">${h1(s.meta_mes)}h</td><td class="num hide-m">${h1(s.feitas_mes)}h</td><td class="num">${sinal(s.saldo_mes)}</td><td class="num hide-m">${sinal(s.saldo_mes_ant)}</td></tr>`).join('');
     document.getElementById('cont').textContent = `${l.length} aluno(s)` + (l.length > 400 ? ' — mostrando 400, refine a busca' : '');
     document.querySelectorAll('#tb tr').forEach(tr => tr.onclick = () => abrirAluno(tr.dataset.a));
     S._lista = l;
@@ -766,7 +794,7 @@ VIEWS.pedidos = async () => {
     </div>
     ${filtro === 'aguardando' ? `<div id="barra" class="row" style="margin-top:10px;background:#eef2f7;padding:8px 10px;border-radius:10px;display:none">
       <b id="nsel"></b><span class="grow"></span><button class="btn sm bad" id="lr">Recusar selecionados</button><button class="btn sm ok" id="la">Aprovar selecionados</button></div>` : ''}
-    <div class="scroll" style="margin-top:10px"><table><thead><tr>
+    <div class="scroll" style="margin-top:10px"><table class="tcards"><thead><tr>
       ${filtro === 'aguardando' ? '<th style="width:28px"><input type="checkbox" id="tds" style="width:auto"></th>' : ''}
       <th>Aluno</th><th class="hide-m">Setor</th><th>Pedido</th><th class="hide-m">Motivo</th>${filtro === 'aguardando' ? '' : '<th>Situação</th>'}<th></th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="row" style="margin-top:10px"><span class="muted small grow" id="info"></span><button class="btn sm" id="ant">‹ Anterior</button><button class="btn sm" id="prx">Próxima ›</button></div>
@@ -786,7 +814,7 @@ VIEWS.pedidos = async () => {
       <td class="small" style="white-space:nowrap">${p.tipo_alvo === 'entrada' ? '▶ Entrada' : '■ Saída'}<div><b>${dataBR(p.data)}</b> às <b>${p.horario.slice(0, 5)}</b></div></td>
       <td class="hide-m small muted" style="max-width:260px" title="${esc(p.motivo)}">${esc(p.motivo.length > 60 ? p.motivo.slice(0, 60) + '…' : p.motivo)}${p.resposta ? `<div>Resposta: ${esc(p.resposta)}</div>` : ''}</td>
       ${filtro === 'aguardando' ? '' : `<td><span class="tag ${st[p.status][1]}">${st[p.status][0]}</span></td>`}
-      <td style="white-space:nowrap"><button class="btn sm" data-cal="${p.aluno_id}" title="Calendário">📅</button>
+      <td class="acts" style="white-space:nowrap"><button class="btn sm" data-cal="${p.aluno_id}" title="Calendário">📅</button>
         ${p.status === 'aguardando' ? `<button class="btn sm bad" data-r="${p.id}" title="Recusar">✕</button><button class="btn sm ok" data-ok="${p.id}" title="Aprovar">✓</button>` : ''}</td></tr>`).join('')
       || `<tr><td colspan="7" class="muted">${filtro === 'aguardando' ? 'Nenhum pedido aguardando. 🎉' : 'Nenhum pedido.'}</td></tr>`;
     document.getElementById('info').textContent = l.length > POR_PAG ? `Página ${pag + 1} de ${pags}` : '';
@@ -926,7 +954,7 @@ VIEWS.acessos = async () => {
       <div class="full"><label>Setores que lidera <span class="muted">(Ctrl+clique para vários; subsetores entram junto)</span></label>${ms()}</div>
     </div><button class="btn primary block">Criar acesso</button></form>
     <div class="muted small" style="margin-top:8px">Passe o e-mail e a senha inicial para a pessoa. No primeiro acesso ela cria a própria senha.</div></div>
-  <div class="card scroll"><h2>Contas</h2><table><thead><tr><th>Nome</th><th>Papel</th><th class="hide-m">Setores</th><th class="hide-m">Último acesso</th><th></th></tr></thead><tbody>
+  <div class="card scroll"><h2>Contas</h2><table class="tcards"><thead><tr><th>Nome</th><th>Papel</th><th class="hide-m">Setores</th><th class="hide-m">Último acesso</th><th></th></tr></thead><tbody>
     ${contas.map(c => `<tr><td>${esc(c.nome)}<div class="muted small">${esc(c.email)}</div></td>
       <td><span class="tag">${c.papel.toUpperCase()}</span> ${c.ativo ? '' : '<span class="tag bad">desativado</span>'} ${c.mfa ? '<span class="tag ok">2 passos</span>' : '<span class="tag warn">2 passos pendente</span>'}</td>
       <td class="hide-m small">${c.papel === 'naf' ? 'Todos' : c.setores.map(id => esc(nomeSetor(id))).join(', ') || '<span class="tag warn">nenhum</span>'}</td>
