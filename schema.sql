@@ -447,3 +447,13 @@ grant select on v_horas_dia, v_saldos to authenticated;
 revoke execute on all functions in schema public from public, anon;
 alter default privileges in schema public revoke all on tables from anon;
 alter default privileges in schema public revoke execute on functions from anon, public;
+
+-- Conta interna do servidor (service_role), usada pela função admin-usuarios.
+-- Necessário porque o projeto foi criado sem expor tabelas novas automaticamente.
+grant usage on schema public to service_role;
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+grant execute on all functions in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant execute on functions to service_role;
