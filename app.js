@@ -1,4 +1,4 @@
-// Trabalho Educativo UNASP — Plataforma de Pontos
+// Atividade Educativa UNASP — Plataforma de Pontos
 // Toda a segurança fica no banco (RLS + funções). Esta chave é pública por design.
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
@@ -69,8 +69,8 @@ async function iniciar() {
 function telaLogin(msg = '') {
   $app.innerHTML = `
   <div class="center"><form class="login" id="f">
-    <div class="logo">TE</div>
-    <h1>Trabalho Educativo</h1>
+    <div class="logo">AE</div>
+    <h1>Atividade Educativa</h1>
     <div class="muted small">UNASP · Controle de horas</div>
     <label for="u">RA ou e-mail</label><input id="u" autocomplete="username" required>
     <label for="p">Senha</label><input id="p" type="password" autocomplete="current-password" required>
@@ -100,7 +100,7 @@ function casca(conteudo) {
   const p = S.perfil;
   $app.innerHTML = `
   <header class="top">
-    <div class="name">TE · UNASP</div>
+    <div class="name">AE · UNASP</div>
     <nav>${MENUS[p.papel].map(([k, t]) => `<a href="#" data-v="${k}" class="${S.view === k ? 'on' : ''}">${t}</a>`).join('')}</nav>
     <div class="who"><span>${esc(p.nome)} · ${p.papel.toUpperCase()}</span><button id="sair">Sair</button></div>
   </header><main id="main">${conteudo}</main>`;

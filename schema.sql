@@ -1,5 +1,5 @@
 -- =====================================================================
--- Trabalho Educativo UNASP — Plataforma de Pontos (Supabase / Postgres)
+-- Atividade Educativa UNASP — Plataforma de Pontos (Supabase / Postgres)
 -- Versão 1 — 06/10/2026
 --
 -- Rodar inteiro no Supabase: SQL Editor → New query → colar → Run.

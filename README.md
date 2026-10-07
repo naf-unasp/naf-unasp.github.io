@@ -1,4 +1,4 @@
-# Trabalho Educativo UNASP — Plataforma de Pontos
+# Atividade Educativa UNASP — Plataforma de Pontos
 
 Site estático (GitHub Pages) + Supabase (projeto `te-unasp`, região São Paulo).
 
