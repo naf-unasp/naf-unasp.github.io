@@ -1,0 +1,4 @@
+*.xlsx
+*.csv
+importacao*.sql
+.env*
