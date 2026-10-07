@@ -258,7 +258,7 @@ begin
       v_ts := p_ts;
     end if;
   elsif a.id = meu_aluno_id() then
-    if s.modo_ponto <> 'aluno' then raise exception 'Neste setor o ponto é registrado pelo líder'; end if;
+    if s.modo_ponto <> 'aluno' then raise exception 'Neste setor a presença é registrada pelo líder'; end if;
     v_origem := 'aluno';           -- aluno nunca escolhe o horário
   else
     raise exception 'Sem permissão';

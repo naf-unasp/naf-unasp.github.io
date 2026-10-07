@@ -1,4 +1,4 @@
-// Atividade Educativa UNASP — Plataforma de Pontos
+// Atividade Educativa UNASP — Plataforma de Registro de Presença
 // Toda a segurança fica no banco (RLS + funções). Esta chave é pública por design.
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
@@ -92,8 +92,8 @@ function telaLogin(msg = '') {
 
 // ---------- casca ----------
 const MENUS = {
-  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar ponto'], ['setores', 'Setores']],
-  lider: [['ponto', 'Registrar ponto'], ['alunos', 'Meus alunos']],
+  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['setores', 'Setores']],
+  lider: [['ponto', 'Registrar presença'], ['alunos', 'Meus alunos']],
   aluno: [['meu', 'Meu saldo']],
 };
 function casca(conteudo) {
@@ -124,7 +124,7 @@ VIEWS.painel = async () => {
   document.getElementById('main').innerHTML = `
   <div class="grid kpis">
     <div class="kpi"><div class="muted small">Bolsistas ativos</div><div class="v">${saldos.length}</div></div>
-    <div class="kpi bad"><div class="muted small">Devendo horas este mês</div><div class="v">${devendo.length}</div></div>
+    <div class="kpi bad"><div class="muted small">Com horas pendentes este mês</div><div class="v">${devendo.length}</div></div>
     <div class="kpi ok"><div class="muted small">Com horas sobrando</div><div class="v">${sobrando.length}</div></div>
     <div class="kpi warn"><div class="muted small">Pendências a resolver</div><div class="v">${pend.length}</div></div>
   </div>
@@ -132,8 +132,8 @@ VIEWS.painel = async () => {
       <select id="fp" style="width:auto"><option value="">Todas (${pend.length})</option>${Object.entries(tipos).map(([k, [t]]) => { const n = pend.filter(p => p.tipo === k).length; return n ? `<option value="${k}">${t} (${n})</option>` : ''; }).join('')}</select></div>
     <div id="lp"></div></div>` : ''}
   <div class="split" style="margin-top:16px">
-    <div class="card"><h2>Mais devendo (mês atual)</h2><div class="scroll"><table><tbody>${devendo.slice(0, 15).map(linha).join('') || '<tr><td class="muted">Ninguém devendo.</td></tr>'}</tbody></table></div>
-      ${devAnt.length ? `<div class="muted small" style="margin-top:8px">${devAnt.length} aluno(s) fecharam o mês passado devendo.</div>` : ''}</div>
+    <div class="card"><h2>Mais horas pendentes (mês atual)</h2><div class="scroll"><table><tbody>${devendo.slice(0, 15).map(linha).join('') || '<tr><td class="muted">Ninguém com horas pendentes.</td></tr>'}</tbody></table></div>
+      ${devAnt.length ? `<div class="muted small" style="margin-top:8px">${devAnt.length} aluno(s) fecharam o mês passado com horas pendentes.</div>` : ''}</div>
     <div class="card"><h2>Mais horas sobrando</h2><div class="scroll"><table><tbody>${sobrando.slice(0, 15).map(linha).join('') || '<tr><td class="muted">Nenhum ainda.</td></tr>'}</tbody></table></div></div>
   </div>`;
   const renderPend = filtro => {
@@ -166,10 +166,10 @@ VIEWS.alunos = async () => {
     <div class="row" style="margin-top:8px">
       <input class="grow" id="busca" placeholder="Buscar por nome ou RA">
       <select id="fs" style="width:auto;max-width:260px">${optsSetor('', 'Todos os setores')}</select>
-      <select id="fsal" style="width:auto"><option value="">Todos</option><option value="dev">Devendo</option><option value="sob">Com horas sobrando</option></select>
+      <select id="fsal" style="width:auto"><option value="">Todos</option><option value="dev">Com horas pendentes</option><option value="sob">Com horas sobrando</option></select>
       ${naf ? '<button class="btn" id="csv">Exportar</button>' : ''}
     </div>
-    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num">Meta mês</th><th class="num">Feitas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num">Previsto</th><th class="num">Cumpridas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="muted small" id="cont" style="margin-top:8px"></div>
   </div>`;
   const filtrar = () => {
@@ -266,7 +266,7 @@ async function abrirAluno(id) {
   });
 }
 
-// ---------- Registrar ponto (líder e NAF) ----------
+// ---------- Registrar presença (líder e NAF) ----------
 VIEWS.ponto = async () => {
   let meus;
   if (S.perfil.papel === 'naf') meus = S.setores;
@@ -284,15 +284,15 @@ VIEWS.ponto = async () => {
   ]);
   const ult = {}; regs.forEach(r => (ult[r.aluno_id] = r));
   const turno = setor.turno_fixo_horas;
-  const modos = { lider: 'O líder bate o ponto', aluno: 'Cada aluno bate no próprio login', quiosque: 'Computador do setor (RA + PIN)' };
+  const modos = { lider: 'O líder registra a presença', aluno: 'Cada aluno registra no próprio login', quiosque: 'Computador do setor (RA + PIN)' };
   document.getElementById('main').innerHTML = `
   <div class="card">
     <div class="row">
       <div class="grow"><label>Setor</label><select id="ss">${meus.map(s => `<option value="${s.id}" ${s.id === setor.id ? 'selected' : ''}>${esc(nomeSetor(s.id))}</option>`).join('')}</select></div>
-      <div class="grow"><label>Como este setor bate o ponto</label><select id="modo">${Object.entries(modos).map(([k, t]) => `<option value="${k}" ${setor.modo_ponto === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="grow"><label>Como este setor registra a presença</label><select id="modo">${Object.entries(modos).map(([k, t]) => `<option value="${k}" ${setor.modo_ponto === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     </div>
     ${setor.modo_ponto === 'quiosque' ? '<button class="btn primary block" id="kq">Abrir modo quiosque neste computador</button>' : ''}
-    ${setor.modo_ponto === 'aluno' ? '<div class="muted small" style="margin-top:10px">Os alunos batem o ponto no próprio login. Você ainda pode lançar por eles abaixo.</div>' : ''}
+    ${setor.modo_ponto === 'aluno' ? '<div class="muted small" style="margin-top:10px">Os alunos registram a presença no próprio login. Você ainda pode registrar por eles abaixo.</div>' : ''}
   </div>
   <div class="card"><div class="row"><h2 class="grow">${esc(setor.nome)} · ${alunos.length} aluno(s)</h2>
     <input id="bp" placeholder="Buscar" style="width:200px"></div>
@@ -331,7 +331,7 @@ function quiosque(setor) {
     <div class="muted" style="color:#cfdaea">${esc(nomeSetor(setor.id))}</div><div class="clock" id="clk"></div>
     <form id="kf"><input id="kra" placeholder="Seu RA" inputmode="numeric" autocomplete="off" required>
     <input id="kpin" type="password" placeholder="PIN" inputmode="numeric" maxlength="6" autocomplete="off" required>
-    <button class="btn block" style="font-size:18px;padding:14px">Bater ponto</button></form><div class="msg" id="km"></div></div></div>`;
+    <button class="btn block" style="font-size:18px;padding:14px">Registrar presença</button></form><div class="msg" id="km"></div></div></div>`;
   const tick = () => { const c = document.getElementById('clk'); if (c) c.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); };
   tick(); const iv = setInterval(tick, 10000);
   document.getElementById('kra').focus();
@@ -364,7 +364,7 @@ VIEWS.setores = async () => {
       <input name="turno" type="number" step="0.5" min="0" placeholder="Turno fixo (h)" style="width:150px">
       <button class="btn primary">Criar</button></form>
     <div class="muted small" style="margin-top:6px">Subsetor: escolha o setor pai. O líder do setor pai enxerga os subsetores. "Turno fixo" lança entrada + saída de uma vez (ex.: 4h na Conservação).</div></div>
-  <div class="card scroll"><table><thead><tr><th>Setor</th><th class="num">Alunos</th><th>Modo de ponto</th><th>Turno fixo</th><th></th></tr></thead><tbody>
+  <div class="card scroll"><table><thead><tr><th>Setor</th><th class="num">Alunos</th><th>Modo de registro</th><th>Turno fixo</th><th></th></tr></thead><tbody>
     ${setoresOrdenados().map(s => `<tr><td>${s.setor_pai_id ? '<span class="muted">└ </span>' : ''}${esc(s.nome)}</td><td class="num">${n[s.id] || 0}</td>
       <td><span class="tag">${esc(s.modo_ponto)}</span></td><td>${s.turno_fixo_horas ? h1(s.turno_fixo_horas) + 'h' : '—'}</td>
       <td><button class="btn sm" data-e="${s.id}">Editar</button></td></tr>`).join('')}
@@ -390,17 +390,17 @@ VIEWS.meu = async () => {
   const setor = s && S.setores.find(x => x.id === s.setor_id);
   document.getElementById('main').innerHTML = !s ? '<div class="card">Seu cadastro não está ativo. Procure o NAF.</div>' : `
   <div class="card"><h2>${esc(s.nome)}</h2><div class="muted">${esc(nomeSetor(s.setor_id))} · ${esc(s.plano || '')} · ${h1(s.horas_semana)}h por semana</div>
-    ${setor && setor.modo_ponto === 'aluno' ? '<button class="btn primary block" id="bater">Bater ponto agora</button>' : ''}</div>
+    ${setor && setor.modo_ponto === 'aluno' ? '<button class="btn primary block" id="bater">Registrar presença agora</button>' : ''}</div>
   <div class="grid kpis">
-    <div class="kpi"><div class="muted small">Meta até hoje</div><div class="v">${h1(s.meta_mes)}h</div></div>
-    <div class="kpi"><div class="muted small">Feitas no mês</div><div class="v">${h1(s.feitas_mes)}h</div></div>
+    <div class="kpi"><div class="muted small">Previsto até hoje</div><div class="v">${h1(s.meta_mes)}h</div></div>
+    <div class="kpi"><div class="muted small">Cumpridas no mês</div><div class="v">${h1(s.feitas_mes)}h</div></div>
     <div class="kpi ${s.saldo_mes < -0.05 ? 'bad' : 'ok'}"><div class="muted small">Saldo do mês</div><div class="v">${s.saldo_mes > 0 ? '+' : ''}${h1(s.saldo_mes)}h</div></div>
     <div class="kpi ${s.saldo_mes_ant < -0.05 ? 'bad' : 'ok'}"><div class="muted small">Mês passado</div><div class="v">${s.saldo_mes_ant > 0 ? '+' : ''}${h1(s.saldo_mes_ant)}h</div></div>
   </div>
   ${s.dias_sem_par ? `<div class="card" style="margin-top:16px"><span class="tag warn">Atenção</span> ${s.dias_sem_par} dia(s) com entrada sem saída (ou vice-versa) não estão contando horas. Fale com seu líder.</div>` : ''}
   <div class="split" style="margin-top:16px">
     <div class="card"><h2>Últimos registros</h2>${regs.length ? `<table><tbody>${regs.map(r => `<tr><td>${dataHora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro ainda.</div>'}</div>
-    <div class="card"><h2>PIN do quiosque</h2><div class="muted small">Usado para bater ponto no computador do setor.</div>
+    <div class="card"><h2>PIN do quiosque</h2><div class="muted small">Usado para registrar presença no computador do setor.</div>
       <div class="row" style="margin-top:8px"><input id="pin" class="grow" type="password" inputmode="numeric" maxlength="6" placeholder="4 a 6 números"><button class="btn" id="pbt">Salvar PIN</button></div>
       <hr><h2>Trocar senha</h2><div class="row"><input id="ns" class="grow" type="password" placeholder="Nova senha (mín. 8)"><button class="btn" id="nsb">Trocar</button></div></div>
   </div>`;
