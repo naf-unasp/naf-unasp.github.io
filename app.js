@@ -182,7 +182,9 @@ async function telaMFA() {
     for (const f of (data?.all || []).filter(f => f.status !== 'verified')) await sb.auth.mfa.unenroll({ factorId: f.id }).catch(() => {});
     const { data: en, error } = await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Atividade Educativa' });
     if (error) { toast(error.message, true); return sair('Não foi possível iniciar o login em dois passos.'); }
-    factorId = en.id; qr = en.totp.qr_code; segredo = en.totp.secret;
+    factorId = en.id; segredo = en.totp.secret;
+    const q0 = String(en.totp.qr_code || '').trim();
+    qr = q0.startsWith('data:') ? q0 : 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q0);
   }
   $app.innerHTML = `
   <div class="center"><form class="login" id="f">
@@ -193,7 +195,7 @@ async function telaMFA() {
           <li>Instale no celular um app autenticador (Google Authenticator ou Microsoft Authenticator).</li>
           <li>No app, toque em <b>+</b> e escaneie o código abaixo.</li>
           <li>Digite o código de 6 números que aparecer.</li></ol>
-        <div style="text-align:center"><img src="${qr}" alt="QR code" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px"></div>
+        <div style="text-align:center"><img src="${esc(qr)}" alt="QR code" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px"></div>
         <div class="muted small" style="margin-top:6px;word-break:break-all">Não consegue escanear? Digite a chave: <b>${esc(segredo)}</b></div>`}
     <label for="c">Código de 6 números</label><input id="c" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required style="font-size:22px;text-align:center;letter-spacing:6px">
     <button class="btn primary block" id="b">Confirmar</button><div class="err" id="e"></div>
