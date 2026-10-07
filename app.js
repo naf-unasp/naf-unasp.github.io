@@ -680,14 +680,31 @@ VIEWS.calendario = async () => {
   const lista = gestor ? await q(sb.from('alunos').select('id,nome,ra,setor_id').eq('ativo', true).order('nome')) : [];
   if (gestor && !lista.length) { document.getElementById('main').innerHTML = '<div class="card">Nenhum aluno no seu setor.</div>'; return; }
   if (gestor && (!S.calAluno || !lista.some(a => a.id === S.calAluno))) S.calAluno = lista[0].id;
-  document.getElementById('main').innerHTML = `${gestor ? `<div class="card"><label>Aluno</label>
-    <input id="cbusca" placeholder="Buscar aluno por nome ou RA" list="cl" value="${esc((lista.find(a => a.id === S.calAluno) || {}).nome)}">
-    <datalist id="cl">${lista.map(a => `<option value="${esc(a.nome)}">RA ${esc(a.ra)} · ${esc(nomeSetor(a.setor_id))}</option>`).join('')}</datalist></div>` : ''}
+  // setor (com subsetores) → aluno
+  const comAlunos = new Set(lista.map(a => a.setor_id));
+  const filhos = id => (S.setores || []).filter(s => s.setor_pai_id === id).map(s => s.id);
+  const desc = id => { const out = new Set([id]); const f = [id]; while (f.length) filhos(f.pop()).forEach(c => { if (!out.has(c)) { out.add(c); f.push(c); } }); return out; };
+  const setoresOpc = (S.setores || []).filter(s => [...desc(s.id)].some(i => comAlunos.has(i)))
+    .sort((a, b) => nomeSetor(a.id).localeCompare(nomeSetor(b.id), 'pt-BR'));
+  const atual = lista.find(a => a.id === S.calAluno);
+  if (gestor && (S.calSetor === undefined || (S.calSetor && atual && !desc(+S.calSetor).has(atual.setor_id)))) S.calSetor = atual?.setor_id || '';
+  document.getElementById('main').innerHTML = `${gestor ? `<div class="card"><div class="row">
+    <div class="grow"><label>Setor</label><select id="csetor"><option value="">Todos os setores</option>${setoresOpc.map(s => `<option value="${s.id}" ${s.id == S.calSetor ? 'selected' : ''}>${esc(nomeSetor(s.id))}</option>`).join('')}</select></div>
+    <div class="grow"><label>Aluno</label><select id="caluno"></select></div></div></div>` : ''}
     <div id="calbox"></div>`;
-  if (gestor) document.getElementById('cbusca').onchange = e => {
-    const v = e.target.value.trim().toLowerCase(); const a = lista.find(x => x.nome.toLowerCase() === v || x.ra === v);
-    if (a) { S.calAluno = a.id; calendario(document.getElementById('calbox'), a.id, true); }
-  };
+  if (gestor) {
+    const sAl = document.getElementById('caluno');
+    const preencher = () => {
+      const ids = S.calSetor ? desc(+S.calSetor) : null;
+      const vis = lista.filter(a => !ids || ids.has(a.setor_id));
+      if (!vis.some(a => a.id === S.calAluno)) S.calAluno = vis[0]?.id;
+      sAl.innerHTML = vis.map(a => `<option value="${a.id}" ${a.id === S.calAluno ? 'selected' : ''}>${esc(a.nome)} · RA ${esc(a.ra)}</option>`).join('');
+      calendario(document.getElementById('calbox'), S.calAluno, true);
+    };
+    document.getElementById('csetor').onchange = e => { S.calSetor = e.target.value; preencher(); };
+    sAl.onchange = e => { S.calAluno = e.target.value; calendario(document.getElementById('calbox'), S.calAluno, true); };
+    preencher(); return;
+  }
   calendario(document.getElementById('calbox'), gestor ? S.calAluno : S.meuAlunoId, gestor);
 };
 async function calendario(box, alunoId, gestor, mesRef) {
