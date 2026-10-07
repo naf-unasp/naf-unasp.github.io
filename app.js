@@ -59,6 +59,10 @@ async function iniciar() {
   const perfil = (await q(sb.from('perfis').select('*').eq('user_id', session.user.id)))[0];
   if (!perfil || !perfil.ativo) { await sb.auth.signOut(); return telaLogin('Esta conta não tem acesso à plataforma.'); }
   S.perfil = perfil;
+  if (perfil.papel !== 'aluno') {
+    const { data: aal } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.currentLevel !== 'aal2') return telaMFA();
+  }
   [S.setores, S.planos] = await Promise.all([
     q(sb.from('setores').select('*').order('nome')),
     q(sb.from('planos').select('*').order('codigo')),
@@ -167,6 +171,44 @@ async function linksEmLote(lista) {
   document.body.appendChild(ov);
   ov.querySelector('#x').onclick = () => ov.remove();
   ov.querySelector('#cp').onclick = async () => { await navigator.clipboard.writeText(linhas.join('\n')); toast('Links copiados.'); };
+}
+
+// ---------- Login em dois passos (NAF e líderes) ----------
+async function telaMFA() {
+  const { data } = await sb.auth.mfa.listFactors();
+  const fator = (data?.totp || []).find(f => f.status === 'verified');
+  let factorId = fator?.id, qr = '', segredo = '';
+  if (!fator) {
+    for (const f of (data?.all || []).filter(f => f.status !== 'verified')) await sb.auth.mfa.unenroll({ factorId: f.id }).catch(() => {});
+    const { data: en, error } = await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Atividade Educativa' });
+    if (error) { toast(error.message, true); return sair('Não foi possível iniciar o login em dois passos.'); }
+    factorId = en.id; qr = en.totp.qr_code; segredo = en.totp.secret;
+  }
+  $app.innerHTML = `
+  <div class="center"><form class="login" id="f">
+    <div class="logo">AE</div><h1>${fator ? 'Confirme que é você' : 'Ative o login em dois passos'}</h1>
+    ${fator ? `<div class="muted small">Abra o app autenticador no celular e digite o código de 6 números de "Atividade Educativa".</div>`
+      : `<div class="muted small">Por segurança, quem vê dados de vários alunos precisa de um segundo passo no login. É feito uma vez só.</div>
+        <ol class="small" style="padding-left:18px;margin:12px 0">
+          <li>Instale no celular um app autenticador (Google Authenticator ou Microsoft Authenticator).</li>
+          <li>No app, toque em <b>+</b> e escaneie o código abaixo.</li>
+          <li>Digite o código de 6 números que aparecer.</li></ol>
+        <div style="text-align:center"><img src="${qr}" alt="QR code" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px"></div>
+        <div class="muted small" style="margin-top:6px;word-break:break-all">Não consegue escanear? Digite a chave: <b>${esc(segredo)}</b></div>`}
+    <label for="c">Código de 6 números</label><input id="c" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required style="font-size:22px;text-align:center;letter-spacing:6px">
+    <button class="btn primary block" id="b">Confirmar</button><div class="err" id="e"></div>
+    <button type="button" class="btn block" id="s" style="margin-top:8px">Sair</button>
+    <div class="muted small" style="margin-top:8px">Perdeu o celular? Peça ao NAF para resetar o seu login em dois passos.</div>
+  </form></div>`;
+  document.getElementById('c').focus();
+  document.getElementById('s').onclick = () => sair();
+  document.getElementById('f').onsubmit = async ev => {
+    ev.preventDefault(); const bt = document.getElementById('b'); bt.disabled = true;
+    const { error } = await sb.auth.mfa.challengeAndVerify({ factorId, code: document.getElementById('c').value.trim() });
+    bt.disabled = false;
+    if (error) { document.getElementById('e').textContent = 'Código inválido. Confira o horário do celular e tente o código atual.'; return; }
+    toast(fator ? 'Confirmado.' : 'Login em dois passos ativado.'); iniciar();
+  };
 }
 
 function telaTrocaSenha() {
@@ -310,7 +352,7 @@ VIEWS.alunos = async () => {
 // ---------- Ficha do aluno (drawer) ----------
 async function abrirAluno(id) {
   const naf = S.perfil.papel === 'naf';
-  const a = id ? (await q(sb.from('alunos').select('id,ra,nome,nascimento,telefone,curso,semestre,plano,setor_id,plantao_setor_id,horas_semana,observacao,ativo,dias_trabalho,escala_alternada,dias_trabalho_b,dias_ref_a').eq('id', id)))[0]
+  const a = id ? (await q(sb.from('alunos').select('id,ra,nome,nascimento,telefone,curso,semestre,plano,setor_id,plantao_setor_id,horas_semana,observacao,ativo,dias_trabalho,escala_alternada,dias_trabalho_b,dias_ref_a,desativado_em').eq('id', id)))[0]
     : { ativo: true };
   if (!a) return toast('Aluno não encontrado.', true);
   const [regs, pend, trans] = id ? await Promise.all([
@@ -324,6 +366,7 @@ async function abrirAluno(id) {
     <button class="btn sm close" id="x">Fechar</button>
     <h2>${id ? esc(a.nome) : 'Novo aluno'}</h2>
     ${id ? `<div class="muted small">RA ${esc(a.ra)} · ${esc(nomeSetor(a.setor_id))} ${a.ativo ? '' : '<span class="tag bad">inativo</span>'}</div>` : ''}
+    ${id && !a.ativo && a.desativado_em ? `<div class="tag warn" style="margin-top:8px;display:block;white-space:normal">Desativado em ${new Date(a.desativado_em).toLocaleDateString('pt-BR')}. Pela regra de retenção, os dados serão apagados em ${new Date(new Date(a.desativado_em).setFullYear(new Date(a.desativado_em).getFullYear() + 5)).toLocaleDateString('pt-BR')}.</div>` : ''}
     ${id ? '<button class="btn sm" id="vcal" style="margin-top:10px">📅 Calendário deste aluno</button>' : ''}
     ${pend.map(p => `<div class="tag warn" style="margin-top:8px;display:block;white-space:normal">⚠️ ${esc(p.descricao)}</div>`).join('')}
     <form id="fa"><div class="fields">
@@ -796,7 +839,7 @@ function quiosque(setor) {
     sb.auth.getUser().then(async ({ data: { user } }) => {
       const { error } = await sb.auth.signInWithPassword({ email: user.email, password: s });
       if (error) return toast('Senha incorreta.', true);
-      clearInterval(iv); ir('ponto');
+      clearInterval(iv); iniciar();
     });
   };
 }
@@ -847,11 +890,12 @@ VIEWS.acessos = async () => {
     <div class="muted small" style="margin-top:8px">Passe o e-mail e a senha inicial para a pessoa. No primeiro acesso ela cria a própria senha.</div></div>
   <div class="card scroll"><h2>Contas</h2><table><thead><tr><th>Nome</th><th>Papel</th><th class="hide-m">Setores</th><th class="hide-m">Último acesso</th><th></th></tr></thead><tbody>
     ${contas.map(c => `<tr><td>${esc(c.nome)}<div class="muted small">${esc(c.email)}</div></td>
-      <td><span class="tag">${c.papel.toUpperCase()}</span> ${c.ativo ? '' : '<span class="tag bad">desativado</span>'}</td>
+      <td><span class="tag">${c.papel.toUpperCase()}</span> ${c.ativo ? '' : '<span class="tag bad">desativado</span>'} ${c.mfa ? '<span class="tag ok">2 passos</span>' : '<span class="tag warn">2 passos pendente</span>'}</td>
       <td class="hide-m small">${c.papel === 'naf' ? 'Todos' : c.setores.map(id => esc(nomeSetor(id))).join(', ') || '<span class="tag warn">nenhum</span>'}</td>
       <td class="hide-m small">${c.ultimo_acesso ? dataHora(c.ultimo_acesso) : '—'}</td>
       <td><div class="row">${c.papel === 'lider' ? `<button class="btn sm" data-es="${c.user_id}">Setores</button>` : ''}
         <button class="btn sm" data-rs="${c.user_id}">Resetar senha</button>
+        ${c.mfa && c.user_id !== S.perfil.user_id ? `<button class="btn sm" data-rm="${c.user_id}">Resetar 2 passos</button>` : ''}
         ${c.user_id === S.perfil.user_id ? '' : `<button class="btn sm" data-at="${c.user_id}" data-v="${c.ativo ? 0 : 1}">${c.ativo ? 'Desativar' : 'Reativar'}</button>`}</div></td></tr>`).join('')}
   </tbody></table></div>`;
   document.getElementById('fl').onsubmit = async e => {
@@ -864,6 +908,10 @@ VIEWS.acessos = async () => {
   document.querySelectorAll('[data-rs]').forEach(b => b.onclick = async () => {
     const s = prompt('Nova senha inicial (mínimo 8 caracteres):', senhaSugerida()); if (!s) return;
     await adminFn('resetar_senha', { user_id: b.dataset.rs, senha: s }); toast(`Senha resetada. Nova senha inicial: ${s}`);
+  });
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remover o login em dois passos desta pessoa? Ela vai cadastrar o celular de novo no próximo acesso.')) return;
+    await adminFn('resetar_mfa', { user_id: b.dataset.rm }); toast('Login em dois passos resetado.'); VIEWS.acessos();
   });
   document.querySelectorAll('[data-at]').forEach(b => b.onclick = async () => {
     await adminFn('definir_ativo', { user_id: b.dataset.at, ativo: b.dataset.v === '1' }); toast('Conta atualizada.'); VIEWS.acessos();

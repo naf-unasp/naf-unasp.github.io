@@ -31,6 +31,9 @@ Deno.serve(async (req) => {
   if (eu || !u?.user) return resp({ erro: 'Sessão inválida' }, 401);
   const { data: eu_perfil } = await admin.from('perfis').select('papel, ativo').eq('user_id', u.user.id).maybeSingle();
   if (!eu_perfil || eu_perfil.papel !== 'naf' || !eu_perfil.ativo) return resp({ erro: 'Só o NAF pode gerenciar acessos' }, 403);
+  let aal = 'aal1';
+  try { aal = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).aal || 'aal1'; } catch { /* token malformado */ }
+  if (aal !== 'aal2') return resp({ erro: 'Confirme o login em dois passos para gerenciar acessos' }, 403);
 
   let b: Record<string, any>;
   try { b = await req.json(); } catch { return resp({ erro: 'Corpo inválido' }, 400); }
@@ -106,10 +109,23 @@ Deno.serve(async (req) => {
         const out = [];
         for (const p of perfis || []) {
           const { data: au } = await admin.auth.admin.getUserById(p.user_id);
+          const { data: fs } = await admin.auth.admin.mfa.listFactors({ userId: p.user_id });
           out.push({ ...p, email: au?.user?.email, ultimo_acesso: au?.user?.last_sign_in_at,
+            mfa: (fs?.factors || []).some((f: any) => f.status === 'verified'),
             setores: (lid || []).filter((l) => l.user_id === p.user_id).map((l) => l.setor_id) });
         }
         return resp({ ok: true, contas: out });
+      }
+
+      // Remove o login em dois passos de alguém que perdeu o celular (cadastra de novo no próximo login)
+      case 'resetar_mfa': {
+        if (!b.user_id) return resp({ erro: 'Conta não informada' }, 400);
+        const { data: fs, error } = await admin.auth.admin.mfa.listFactors({ userId: b.user_id });
+        if (error) return resp({ erro: error.message }, 400);
+        for (const f of fs?.factors || []) await admin.auth.admin.mfa.deleteFactor({ id: f.id, userId: b.user_id });
+        await admin.auth.admin.signOut(b.user_id).catch(() => {});
+        await audit('RESETAR_MFA', b.user_id, {});
+        return resp({ ok: true });
       }
 
       // Quais alunos já têm login
