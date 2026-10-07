@@ -98,3 +98,19 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}
   .top .who span{display:none}
   .hide-m{display:none}
 }
+
+/* Calendário */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cw{text-align:center;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase}
+.cd{min-height:62px;border:1px solid var(--line);border-radius:10px;padding:6px;cursor:pointer;background:#fff;user-select:none}
+.cd:hover{background:#f7f9fc}
+.cd .cn{font-weight:600;font-size:13px}
+.cd .ch{font-size:12px;margin-top:4px;font-weight:600}
+.cd.cok{background:var(--ok-bg)} .cd.cok .ch{color:var(--ok)}
+.cd.cbad{background:var(--bad-bg)} .cd.cbad .ch{color:var(--bad)}
+.cd.ccomb{border:2px solid var(--bad)}
+.cd.choje .cn{color:var(--brand-2);text-decoration:underline}
+.cd.csel{box-shadow:0 0 0 3px rgba(44,90,143,.35)}
+.leg{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:middle}
+.leg.ccomb{border:2px solid var(--bad)} .leg.cok{background:var(--ok-bg)} .leg.cbad{background:var(--bad-bg)}
+@media (max-width:860px){ .cd{min-height:48px;padding:4px} .cd .ch{font-size:10px} .top nav a{padding:8px 8px} }

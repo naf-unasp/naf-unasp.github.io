@@ -38,8 +38,9 @@ const setoresOrdenados = () => {
   raiz.forEach(r => { out.push(r); S.setores.filter(s => s.setor_pai_id === r.id).sort((a, b) => a.nome.localeCompare(b.nome)).forEach(f => out.push(f)); });
   return out;
 };
-const optsSetor = (sel, vazio) => (vazio ? `<option value="">${vazio}</option>` : '') +
-  setoresOrdenados().map(s => `<option value="${s.id}" ${s.id == sel ? 'selected' : ''}>${esc(nomeSetor(s.id))}</option>`).join('');
+const setoresVisiveis = () => S.perfil?.papel === 'lider' ? setoresOrdenados().filter(s => (S.meusSetores || []).includes(s.id)) : setoresOrdenados();
+const optsSetor = (sel, vazio, todos) => (vazio ? `<option value="">${vazio}</option>` : '') +
+  (todos ? setoresOrdenados() : setoresVisiveis()).map(s => `<option value="${s.id}" ${s.id == sel ? 'selected' : ''}>${esc(nomeSetor(s.id))}</option>`).join('');
 
 // ---------- sessão ----------
 let inativo;
@@ -63,7 +64,11 @@ async function iniciar() {
   vigiarInatividade();
   if (perfil.troca_senha) return telaTrocaSenha();
   if (perfil.papel === 'naf') return ir('painel');
-  if (perfil.papel === 'lider') return ir('ponto');
+  if (perfil.papel === 'lider') {
+    const ids = (await q(sb.from('lideres_setor').select('setor_id').eq('user_id', perfil.user_id))).map(r => r.setor_id);
+    S.meusSetores = S.setores.filter(s => ids.includes(s.id) || ids.includes(s.setor_pai_id)).map(s => s.id);
+    return ir('visao');
+  }
   return ir('meu');
 }
 
@@ -128,8 +133,8 @@ function senhaSugerida() {
 
 // ---------- casca ----------
 const MENUS = {
-  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['setores', 'Setores'], ['acessos', 'Acessos']],
-  lider: [['ponto', 'Registrar presença'], ['alunos', 'Meus alunos']],
+  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['calendario', 'Calendário'], ['pedidos', 'Pedidos'], ['setores', 'Setores'], ['acessos', 'Acessos']],
+  lider: [['visao', 'Visão geral'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['calendario', 'Calendário'], ['pedidos', 'Pedidos']],
   aluno: [['meu', 'Meu saldo']],
 };
 function casca(conteudo) {
@@ -203,7 +208,7 @@ VIEWS.alunos = async () => {
       <input class="grow" id="busca" placeholder="Buscar por nome ou RA">
       <select id="fs" style="width:auto;max-width:260px">${optsSetor('', 'Todos os setores')}</select>
       <select id="fsal" style="width:auto"><option value="">Todos</option><option value="dev">Com horas pendentes</option><option value="sob">Com horas sobrando</option></select>
-      ${naf ? '<button class="btn" id="csv">Exportar</button>' : ''}
+      <button class="btn" id="xls">Exportar Excel</button>
     </div>
     <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Aluno</th><th class="hide-m">Setor</th><th class="hide-m">Plano</th><th class="num">Previsto</th><th class="num">Cumpridas</th><th class="num">Saldo mês</th><th class="num hide-m">Mês passado</th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="muted small" id="cont" style="margin-top:8px"></div>
@@ -224,21 +229,14 @@ VIEWS.alunos = async () => {
   };
   ['busca', 'fs', 'fsal'].forEach(id => document.getElementById(id).oninput = filtrar);
   filtrar();
-  if (naf) {
-    document.getElementById('novo').onclick = () => abrirAluno(null);
-    document.getElementById('csv').onclick = () => {
-      const cols = ['ra', 'nome', 'setor', 'plano', 'horas_semana', 'meta_mes', 'feitas_mes', 'saldo_mes', 'saldo_mes_ant'];
-      const csv = [cols.join(';'), ...S._lista.map(s => cols.map(c => String(c === 'setor' ? nomeSetor(s.setor_id) : s[c] ?? '').replace(/;/g, ',')).join(';'))].join('\n');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
-      a.download = `saldos-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-    };
-  }
+  if (naf) document.getElementById('novo').onclick = () => abrirAluno(null);
+  document.getElementById('xls').onclick = () => exportarExcel(S._lista);
 };
 
 // ---------- Ficha do aluno (drawer) ----------
 async function abrirAluno(id) {
   const naf = S.perfil.papel === 'naf';
-  const a = id ? (await q(sb.from('alunos').select('id,ra,nome,nascimento,telefone,curso,semestre,plano,setor_id,plantao_setor_id,horas_semana,observacao,ativo').eq('id', id)))[0]
+  const a = id ? (await q(sb.from('alunos').select('id,ra,nome,nascimento,telefone,curso,semestre,plano,setor_id,plantao_setor_id,horas_semana,observacao,ativo,dias_trabalho,escala_alternada,dias_trabalho_b,dias_ref_a').eq('id', id)))[0]
     : { ativo: true };
   if (!a) return toast('Aluno não encontrado.', true);
   const [regs, pend, trans] = id ? await Promise.all([
@@ -252,6 +250,7 @@ async function abrirAluno(id) {
     <button class="btn sm close" id="x">Fechar</button>
     <h2>${id ? esc(a.nome) : 'Novo aluno'}</h2>
     ${id ? `<div class="muted small">RA ${esc(a.ra)} · ${esc(nomeSetor(a.setor_id))} ${a.ativo ? '' : '<span class="tag bad">inativo</span>'}</div>` : ''}
+    ${id ? '<button class="btn sm" id="vcal" style="margin-top:10px">📅 Calendário deste aluno</button>' : ''}
     ${pend.map(p => `<div class="tag warn" style="margin-top:8px;display:block;white-space:normal">⚠️ ${esc(p.descricao)}</div>`).join('')}
     <form id="fa"><div class="fields">
       <div class="full"><label>Nome</label><input name="nome" value="${esc(a.nome)}" required ${dis}></div>
@@ -263,16 +262,17 @@ async function abrirAluno(id) {
       <div><label>Plano</label><select name="plano" ${dis}><option value="">—</option>${S.planos.map(p => `<option value="${p.codigo}" ${p.codigo === a.plano ? 'selected' : ''}>${p.codigo} · ${h1(p.horas_semana)}h/sem</option>`).join('')}</select></div>
       <div><label>Horas/semana individuais</label><input name="horas_semana" type="number" step="0.5" min="0" value="${esc(a.horas_semana)}" placeholder="usar do plano" ${dis}></div>
       ${id ? '' : `<div class="full"><label>Setor</label><select name="setor_id" required>${optsSetor(a.setor_id, 'Escolha…')}</select></div>`}
-      <div class="full"><label>Plantão</label><select name="plantao_setor_id" ${dis}>${optsSetor(a.plantao_setor_id, 'Nenhum')}</select></div>
+      <div class="full"><label>Plantão</label><select name="plantao_setor_id" ${dis}>${optsSetor(a.plantao_setor_id, 'Nenhum', true)}</select></div>
       <div class="full"><label>Observação</label><textarea name="observacao" rows="2" ${dis}>${esc(a.observacao)}</textarea></div>
       ${naf ? `<div class="full"><label><input type="checkbox" name="ativo" style="width:auto" ${a.ativo ? 'checked' : ''}> Ativo</label></div>` : ''}
     </div>${naf ? '<button class="btn primary block">Salvar</button>' : ''}</form>
     ${id && naf ? `<hr><h3>Transferir de setor</h3>
-      <div class="row"><select id="tps" class="grow">${optsSetor('', 'Novo setor…')}</select><button class="btn" id="tbt">Transferir</button></div>
+      <div class="row"><select id="tps" class="grow">${optsSetor('', 'Novo setor…', true)}</select><button class="btn" id="tbt">Transferir</button></div>
       <input id="tmo" placeholder="Motivo (opcional)" style="margin-top:8px">
       ${trans.length ? `<div class="muted small" style="margin-top:8px">${trans.map(t => `${dataHora(t.em)}: ${esc(nomeSetor(t.de_setor))} → ${esc(nomeSetor(t.para_setor))}`).join('<br>')}</div>` : ''}
       <hr><h3>Acesso do aluno</h3><div id="acesso" class="muted small">Verificando…</div>
       <hr><h3>PIN do quiosque</h3><div class="row"><input id="pin" class="grow" inputmode="numeric" maxlength="6" placeholder="4 a 6 números"><button class="btn" id="pbt">Definir PIN</button></div>` : ''}
+    ${id ? `<hr><h3>Dias combinados de atividade</h3><div id="dias"></div>` : ''}
     ${id ? `<hr><h3>Últimos registros</h3>${regs.length ? `<table><tbody>${regs.map(r => `<tr><td>${dataHora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td><td class="muted small">${esc(r.origem)}</td><td>${r.cancelado ? '<span class="tag bad">cancelado</span>' : `<button class="btn sm" data-c="${r.id}">Cancelar</button>`}</td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro.</div>'}` : ''}
   </div>`;
   document.body.appendChild(ov);
@@ -289,6 +289,10 @@ async function abrirAluno(id) {
     else await q(sb.from('alunos').insert({ ...row, setor_id: +d.setor_id }));
     toast('Aluno salvo.'); fechar(); ir(S.view);
   };
+  const vcal = ov.querySelector('#vcal');
+  if (vcal) vcal.onclick = () => { S.calAluno = id; fechar(); ir('calendario'); };
+  const dz = ov.querySelector('#dias');
+  if (dz) editorDias(dz, a, naf || S.perfil.papel === 'lider');
   const tbt = ov.querySelector('#tbt');
   if (tbt) tbt.onclick = async () => {
     const para = ov.querySelector('#tps').value; if (!para) return toast('Escolha o setor.', true);
@@ -319,22 +323,20 @@ async function abrirAluno(id) {
 
 // ---------- Registrar presença (líder e NAF) ----------
 VIEWS.ponto = async () => {
-  let meus;
-  if (S.perfil.papel === 'naf') meus = S.setores;
-  else {
-    const ids = (await q(sb.from('lideres_setor').select('setor_id').eq('user_id', S.perfil.user_id))).map(r => r.setor_id);
-    meus = S.setores.filter(s => ids.includes(s.id) || ids.includes(s.setor_pai_id));
-  }
+  const meus = S.perfil.papel === 'naf' ? S.setores : S.setores.filter(s => (S.meusSetores || []).includes(s.id));
   if (!meus.length) { document.getElementById('main').innerHTML = '<div class="card">Você ainda não foi vinculado a nenhum setor. Fale com o NAF.</div>'; return; }
   if (!S.setorAtivo || !meus.some(s => s.id === S.setorAtivo)) S.setorAtivo = meus[0].id;
   const setor = S.setores.find(s => s.id === S.setorAtivo);
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-  const [alunos, regs] = await Promise.all([
+  const [alunos, regs, saldos] = await Promise.all([
     q(sb.from('alunos').select('id,ra,nome').eq('setor_id', setor.id).eq('ativo', true).order('nome')),
     q(sb.from('registros').select('aluno_id,tipo,ts').eq('setor_id', setor.id).eq('cancelado', false).gte('ts', hoje.toISOString()).order('ts')),
+    q(sb.from('v_saldos').select('aluno_id,saldo_mes').eq('setor_id', setor.id)),
   ]);
   const ult = {}; regs.forEach(r => (ult[r.aluno_id] = r));
+  const sal = {}; saldos.forEach(s => (sal[s.aluno_id] = s.saldo_mes));
   const turno = setor.turno_fixo_horas;
+  const sel = new Set(); let modoLote = false;
   const modos = { lider: 'O líder registra a presença', aluno: 'Cada aluno registra no próprio login', quiosque: 'Computador do setor (RA + PIN)' };
   document.getElementById('main').innerHTML = `
   <div class="card">
@@ -346,28 +348,52 @@ VIEWS.ponto = async () => {
     ${setor.modo_ponto === 'aluno' ? '<div class="muted small" style="margin-top:10px">Os alunos registram a presença no próprio login. Você ainda pode registrar por eles abaixo.</div>' : ''}
   </div>
   <div class="card"><div class="row"><h2 class="grow">${esc(setor.nome)} · ${alunos.length} aluno(s)</h2>
-    <input id="bp" placeholder="Buscar" style="width:200px"></div>
+    <input id="bp" placeholder="Buscar" style="width:180px"><button class="btn" id="lote">Selecionar vários</button></div>
+    <div id="barra" class="row" style="margin-top:10px;display:none;background:#eef2f7;padding:10px;border-radius:10px">
+      <b id="nsel">0 selecionado(s)</b><button class="btn sm" id="todos">Marcar todos</button><span class="grow"></span>
+      ${turno ? `<button class="btn sm primary" id="lt">+${h1(turno)}h turno</button>` : '<button class="btn sm ok" id="le">Registrar entrada</button><button class="btn sm bad" id="ls">Registrar saída</button>'}
+    </div>
     <div class="alunos-ponto" id="lap" style="margin-top:12px"></div></div>`;
   const render = () => {
     const t = document.getElementById('bp').value.toLowerCase();
     document.getElementById('lap').innerHTML = alunos.filter(a => !t || a.nome.toLowerCase().includes(t) || a.ra.includes(t)).map(a => {
       const u = ult[a.id]; const dentro = u && u.tipo === 'entrada';
-      return `<div class="ap ${dentro ? 'dentro' : ''}"><div class="n">${esc(a.nome)}</div>
-        <div class="muted small">RA ${esc(a.ra)}${u ? ` · ${u.tipo === 'entrada' ? 'entrou' : 'saiu'} às ${hora(u.ts)}` : ''}</div>
-        <div class="row">${turno ? `<button class="btn sm primary" data-t="${a.id}">+${h1(turno)}h turno</button>`
-          : `<button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>`}</div></div>`;
+      return `<div class="ap ${dentro ? 'dentro' : ''}" ${modoLote ? `data-s="${a.id}" style="cursor:pointer"` : ''}>
+        <div class="row" style="margin:0">${modoLote ? `<input type="checkbox" style="width:auto" ${sel.has(a.id) ? 'checked' : ''}>` : ''}<div class="n grow">${esc(a.nome)}</div></div>
+        <div class="muted small">RA ${esc(a.ra)}${u ? ` · ${u.tipo === 'entrada' ? 'entrou' : 'saiu'} às ${hora(u.ts)}` : ''} · mês ${sinal(sal[a.id])}</div>
+        ${modoLote ? '' : `<div class="row">${turno ? `<button class="btn sm primary" data-t="${a.id}">+${h1(turno)}h turno</button>`
+          : `<button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>`}
+          <button class="btn sm" data-cal="${a.id}">Calendário</button></div>`}</div>`;
     }).join('') || '<div class="muted">Nenhum aluno.</div>';
+    document.getElementById('nsel').textContent = `${sel.size} selecionado(s)`;
+    document.querySelectorAll('[data-s]').forEach(c => c.onclick = () => { sel.has(c.dataset.s) ? sel.delete(c.dataset.s) : sel.add(c.dataset.s); render(); });
     document.querySelectorAll('[data-p]').forEach(b => b.onclick = async () => {
       b.disabled = true; const r = await q(sb.rpc('bater_ponto', { p_aluno: b.dataset.p }));
       toast(`${r.tipo === 'entrada' ? 'Entrada' : 'Saída'} registrada às ${hora(r.ts)}.`); VIEWS.ponto();
     });
-    document.querySelectorAll('[data-t]').forEach(b => b.onclick = async () => {
-      const ini = prompt('Início do turno (HH:MM)', '08:00'); if (!ini) return;
-      const [hh, mm] = ini.split(':').map(Number); const d = new Date(); d.setHours(hh, mm || 0, 0, 0);
-      await q(sb.rpc('lancar_turno', { p_aluno: b.dataset.t, p_inicio: d.toISOString() })); toast('Turno lançado.'); VIEWS.ponto();
-    });
+    document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => lancarTurnos([b.dataset.t]));
+    document.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => { S.calAluno = b.dataset.cal; ir('calendario'); });
+  };
+  const lancarTurnos = async ids => {
+    const ini = prompt('Início do turno (HH:MM)', '08:00'); if (!ini) return;
+    const [hh, mm] = ini.split(':').map(Number); const d = new Date(); d.setHours(hh, mm || 0, 0, 0);
+    let ok = 0; for (const id of ids) { try { await q(sb.rpc('lancar_turno', { p_aluno: id, p_inicio: d.toISOString() })); ok++; } catch {} }
+    toast(`Turno lançado para ${ok} aluno(s).`); VIEWS.ponto();
+  };
+  const lote = async tipo => {
+    if (!sel.size) return toast('Selecione ao menos um aluno.', true);
+    let ok = 0; for (const id of sel) { try { await q(sb.rpc('bater_ponto', { p_aluno: id, p_tipo: tipo })); ok++; } catch {} }
+    toast(`${tipo === 'entrada' ? 'Entrada' : 'Saída'} registrada para ${ok} aluno(s).`); VIEWS.ponto();
   };
   document.getElementById('bp').oninput = render; render();
+  document.getElementById('lote').onclick = e => {
+    modoLote = !modoLote; sel.clear(); e.target.textContent = modoLote ? 'Cancelar seleção' : 'Selecionar vários';
+    document.getElementById('barra').style.display = modoLote ? 'flex' : 'none'; render();
+  };
+  document.getElementById('todos').onclick = () => { alunos.forEach(a => sel.add(a.id)); render(); };
+  const le = document.getElementById('le'); if (le) le.onclick = () => lote('entrada');
+  const ls = document.getElementById('ls'); if (ls) ls.onclick = () => lote('saida');
+  const lt = document.getElementById('lt'); if (lt) lt.onclick = () => sel.size ? lancarTurnos([...sel]) : toast('Selecione ao menos um aluno.', true);
   document.getElementById('ss').onchange = e => { S.setorAtivo = +e.target.value; VIEWS.ponto(); };
   document.getElementById('modo').onchange = async e => {
     await q(sb.rpc('definir_modo_ponto', { p_setor: setor.id, p_modo: e.target.value }));
@@ -375,6 +401,251 @@ VIEWS.ponto = async () => {
   };
   const kq = document.getElementById('kq'); if (kq) kq.onclick = () => quiosque(setor);
 };
+
+// ---------- Visão geral do líder ----------
+VIEWS.visao = async () => {
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const [saldos, pedidos, regsHoje, alunos, recentes] = await Promise.all([
+    q(sb.from('v_saldos').select('*')),
+    q(sb.from('pedidos').select('id').eq('status', 'aguardando')),
+    q(sb.from('registros').select('aluno_id,tipo,ts').eq('cancelado', false).gte('ts', hoje.toISOString()).order('ts')),
+    q(sb.from('alunos').select('id,nome,nascimento,setor_id').eq('ativo', true)),
+    q(sb.from('registros').select('ts,tipo,origem,alunos(nome)').eq('cancelado', false).order('ts', { ascending: false }).limit(12)),
+  ]);
+  const ult = {}; regsHoje.forEach(r => (ult[r.aluno_id] = r.tipo));
+  const presentes = Object.values(ult).filter(t => t === 'entrada').length;
+  const mes = new Date().getMonth();
+  const aniv = alunos.filter(a => a.nascimento && +a.nascimento.slice(5, 7) - 1 === mes).sort((a, b) => a.nascimento.slice(8).localeCompare(b.nascimento.slice(8)));
+  const pend = saldos.filter(s => s.saldo_mes < -0.05 || s.saldo_mes_ant < -0.05).sort((a, b) => (a.saldo_mes + Math.min(0, a.saldo_mes_ant)) - (b.saldo_mes + Math.min(0, b.saldo_mes_ant)));
+  document.getElementById('main').innerHTML = `
+  <div class="grid kpis">
+    <div class="kpi"><div class="muted small">Bolsistas ativos</div><div class="v">${saldos.length}</div></div>
+    <div class="kpi ok"><div class="muted small">Presentes agora</div><div class="v">${presentes}</div></div>
+    <div class="kpi warn"><div class="muted small">Pedidos aguardando</div><div class="v">${pedidos.length}</div></div>
+    <div class="kpi bad"><div class="muted small">Com horas pendentes</div><div class="v">${pend.length}</div></div>
+  </div>
+  <div class="split" style="margin-top:16px">
+    <div class="card"><h2>Maiores pendências</h2><div class="scroll"><table><thead><tr><th>Aluno</th><th class="num">Este mês</th><th class="num">Mês passado</th></tr></thead><tbody>
+      ${pend.slice(0, 10).map(s => `<tr class="click" data-a="${s.aluno_id}"><td>${esc(s.nome)}<div class="muted small">${esc(nomeSetor(s.setor_id))}</div></td><td class="num">${sinal(s.saldo_mes)}</td><td class="num">${sinal(s.saldo_mes_ant)}</td></tr>`).join('') || '<tr><td class="muted">Ninguém com horas pendentes.</td></tr>'}
+    </tbody></table></div></div>
+    <div class="card"><h2>🎂 Aniversariantes do mês</h2>
+      ${aniv.map(a => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="grow">${esc(a.nome)}</span><span class="tag">${a.nascimento.slice(8)}/${a.nascimento.slice(5, 7)}</span></div>`).join('') || '<div class="muted">Nenhum este mês.</div>'}
+      <hr><h2>Atividade recente</h2>
+      ${recentes.map(r => `<div class="small" style="padding:4px 0">${dataHora(r.ts)} · <b>${esc(r.alunos?.nome || '')}</b> · ${r.tipo === 'entrada' ? 'entrada' : 'saída'} <span class="muted">(${esc(r.origem)})</span></div>`).join('') || '<div class="muted">Nada ainda.</div>'}
+    </div>
+  </div>
+  ${pedidos.length ? `<div class="card"><div class="row"><span class="grow">Há <b>${pedidos.length}</b> pedido(s) de ajuste aguardando sua resposta.</span><button class="btn primary" id="vped">Ver pedidos</button></div></div>` : ''}`;
+  document.querySelectorAll('tr[data-a]').forEach(tr => tr.onclick = () => abrirAluno(tr.dataset.a));
+  const vp = document.getElementById('vped'); if (vp) vp.onclick = () => ir('pedidos');
+};
+
+// ---------- Dias combinados / escala alternada ----------
+const DK = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+const DORD = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'];
+const DNOME = { seg: 'Seg', ter: 'Ter', qua: 'Qua', qui: 'Qui', sex: 'Sex', sab: 'Sáb', dom: 'Dom' };
+const isoDia = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const segundaDe = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+function semanaDaEscala(a, d) {
+  if (!a.escala_alternada || !a.dias_ref_a) return 1;
+  const ref = new Date(a.dias_ref_a + 'T00:00:00');
+  const n = Math.round((segundaDe(d) - segundaDe(ref)) / (7 * 864e5));
+  return ((n % 2) + 2) % 2 === 0 ? 1 : 2;
+}
+function diasNaData(a, d) {
+  const lista = semanaDaEscala(a, d) === 2 ? (a.dias_trabalho_b || []) : (a.dias_trabalho || []);
+  return lista.includes(DK[d.getDay()]);
+}
+function editorDias(el, a, editavel) {
+  const caixas = (nome, lista) => DORD.map(k => `<label style="display:inline-flex;align-items:center;gap:4px;margin:4px 10px 4px 0;font-weight:500">
+      <input type="checkbox" name="${nome}" value="${k}" style="width:auto" ${(lista || []).includes(k) ? 'checked' : ''} ${editavel ? '' : 'disabled'}>${DNOME[k]}</label>`).join('');
+  el.innerHTML = `<form id="fd">
+    <div class="muted small" id="lsa">${a.escala_alternada ? 'Semana 1' : ''}</div><div>${caixas('a', a.dias_trabalho)}</div>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:8px"><input type="checkbox" id="alt" style="width:auto" ${a.escala_alternada ? 'checked' : ''} ${editavel ? '' : 'disabled'}> Escala alternada (semanas diferentes)</label>
+    <div id="sb" style="display:${a.escala_alternada ? 'block' : 'none'}">
+      <div class="muted small">Semana 2</div><div>${caixas('b', a.dias_trabalho_b)}</div>
+      <label>Segunda-feira de uma "Semana 1"</label><input type="date" id="ref" value="${esc(a.dias_ref_a || isoDia(segundaDe(new Date())))}" ${editavel ? '' : 'disabled'}>
+    </div>
+    ${editavel ? '<button class="btn block">Salvar dias</button>' : ''}</form>`;
+  const alt = el.querySelector('#alt');
+  alt.onchange = () => { el.querySelector('#sb').style.display = alt.checked ? 'block' : 'none'; el.querySelector('#lsa').textContent = alt.checked ? 'Semana 1' : ''; };
+  el.querySelector('#fd').onsubmit = async e => {
+    e.preventDefault(); if (!editavel) return;
+    const pega = n => Array.from(el.querySelectorAll(`input[name="${n}"]:checked`), i => i.value);
+    await q(sb.rpc('definir_dias', { p_aluno: a.id, p_dias: pega('a'), p_alternada: alt.checked, p_dias_b: alt.checked ? pega('b') : null, p_ref: alt.checked ? el.querySelector('#ref').value : null }));
+    toast('Dias combinados salvos.');
+  };
+}
+
+// ---------- Calendário ----------
+function horasPorDia(regs) {
+  const dias = {};
+  regs.forEach(r => { const k = isoDia(new Date(r.ts)); (dias[k] = dias[k] || []).push(r); });
+  const out = {};
+  for (const [k, l] of Object.entries(dias)) {
+    l.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    const ent = l.filter(r => r.tipo === 'entrada').length, sai = l.length - ent;
+    let min = 0;
+    for (let i = 0; i < l.length - 1; i++) if (l[i].tipo === 'entrada' && l[i + 1].tipo === 'saida') min += (new Date(l[i + 1].ts) - new Date(l[i].ts)) / 60000;
+    out[k] = { regs: l, semPar: ent !== sai, horas: ent !== sai ? 0 : min / 60 };
+  }
+  return out;
+}
+VIEWS.calendario = async () => {
+  const gestor = S.perfil.papel !== 'aluno';
+  const lista = gestor ? await q(sb.from('alunos').select('id,nome,ra,setor_id').eq('ativo', true).order('nome')) : [];
+  if (gestor && !lista.length) { document.getElementById('main').innerHTML = '<div class="card">Nenhum aluno no seu setor.</div>'; return; }
+  if (gestor && (!S.calAluno || !lista.some(a => a.id === S.calAluno))) S.calAluno = lista[0].id;
+  document.getElementById('main').innerHTML = `${gestor ? `<div class="card"><label>Aluno</label>
+    <input id="cbusca" placeholder="Buscar aluno por nome ou RA" list="cl" value="${esc((lista.find(a => a.id === S.calAluno) || {}).nome)}">
+    <datalist id="cl">${lista.map(a => `<option value="${esc(a.nome)}">RA ${esc(a.ra)} · ${esc(nomeSetor(a.setor_id))}</option>`).join('')}</datalist></div>` : ''}
+    <div id="calbox"></div>`;
+  if (gestor) document.getElementById('cbusca').onchange = e => {
+    const v = e.target.value.trim().toLowerCase(); const a = lista.find(x => x.nome.toLowerCase() === v || x.ra === v);
+    if (a) { S.calAluno = a.id; calendario(document.getElementById('calbox'), a.id, true); }
+  };
+  calendario(document.getElementById('calbox'), gestor ? S.calAluno : S.meuAlunoId, gestor);
+};
+async function calendario(box, alunoId, gestor, mesRef) {
+  const ref = mesRef || new Date(); const ini = new Date(ref.getFullYear(), ref.getMonth(), 1); const fim = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
+  const seg = segundaDe(new Date()); const desde = seg < ini ? seg : ini;
+  const [[a], [s], regs] = await Promise.all([
+    q(sb.from('alunos').select('id,nome,ra,setor_id,dias_trabalho,escala_alternada,dias_trabalho_b,dias_ref_a').eq('id', alunoId)),
+    q(sb.from('v_saldos').select('*').eq('aluno_id', alunoId)),
+    q(sb.from('registros').select('id,tipo,ts,origem').eq('aluno_id', alunoId).eq('cancelado', false).gte('ts', desde.toISOString()).lt('ts', fim > new Date() ? new Date(Date.now() + 864e5).toISOString() : fim.toISOString()).order('ts')),
+  ]);
+  if (!a) { box.innerHTML = '<div class="card">Aluno não encontrado.</div>'; return; }
+  const porDia = horasPorDia(regs);
+  const turno = (S.setores.find(x => x.id === a.setor_id) || {}).turno_fixo_horas;
+  // cards (mês atual) com a regra de abatimento do app antigo
+  const sm = s ? s.saldo_mes : 0, sa = s ? s.saldo_mes_ant : 0;
+  const devAnt = Math.max(0, -sa), exced = Math.max(0, sm), abat = Math.min(exced, devAnt);
+  const restAnt = devAnt - abat, folga = exced - abat;
+  let semana = 0; Object.entries(porDia).forEach(([k, v]) => { if (new Date(k + 'T00:00:00') >= seg) semana += v.horas; });
+  const hs = s ? s.horas_semana : 0;
+  const titulo = ref.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  // grade
+  let cel = ''; const primeiro = (ini.getDay() + 6) % 7;
+  for (let i = 0; i < primeiro; i++) cel += '<div></div>';
+  const hojeK = isoDia(new Date());
+  for (let d = new Date(ini); d < fim; d.setDate(d.getDate() + 1)) {
+    const k = isoDia(d); const info = porDia[k]; const comb = diasNaData(a, d);
+    const cls = info ? (info.semPar ? 'cbad' : info.horas > 0 ? 'cok' : '') : '';
+    cel += `<div class="cd ${cls} ${comb ? 'ccomb' : ''} ${k === hojeK ? 'choje' : ''}" data-d="${k}"><div class="cn">${d.getDate()}</div>${info ? `<div class="ch">${info.semPar ? 'sem par' : h1(info.horas) + 'h'}</div>` : ''}</div>`;
+  }
+  box.innerHTML = `
+  <div class="card"><div class="row"><h2 class="grow">${esc(a.nome)} <span class="muted small">RA ${esc(a.ra)} · ${esc(nomeSetor(a.setor_id))}</span></h2></div>
+  <div class="grid kpis" style="margin-top:8px">
+    <div class="kpi ${sm < -0.05 ? 'bad' : 'ok'}"><div class="muted small">Horas pendentes este mês</div><div class="v">${sm < -0.05 ? h1(-sm) + 'h' : 'Em dia'}</div>${folga > 0.05 ? `<div class="small muted">+${h1(folga)}h de folga</div>` : ''}</div>
+    <div class="kpi ${restAnt > 0.05 ? 'bad' : 'ok'}"><div class="muted small">Pendentes do mês passado</div><div class="v">${restAnt > 0.05 ? h1(restAnt) + 'h' : 'Quitado'}</div>${abat > 0.05 ? `<div class="small muted">${h1(abat)}h abatidas com o excedente</div>` : ''}</div>
+    <div class="kpi"><div class="muted small">Esta semana</div><div class="v">${h1(semana)}h <span class="muted small">/ ${h1(hs)}h</span></div></div>
+    <div class="kpi"><div class="muted small">Cumpridas no mês</div><div class="v">${h1(s ? s.feitas_mes : 0)}h <span class="muted small">/ ${h1(s ? s.meta_mes : 0)}h previstas</span></div></div>
+  </div></div>
+  <div class="card">
+    <div class="row"><button class="btn sm" id="mp">‹</button><h2 class="grow" style="text-align:center;text-transform:capitalize;margin:0">${titulo}</h2><button class="btn sm" id="mn">›</button></div>
+    <div class="cal" style="margin-top:12px">${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map(n => `<div class="cw">${n}</div>`).join('')}${cel}</div>
+    <div class="row small muted" style="margin-top:10px;gap:14px"><span><span class="leg ccomb"></span> dia combinado</span><span><span class="leg cok"></span> presença ok</span><span><span class="leg cbad"></span> sem par (não conta)</span></div>
+    <div class="muted small" style="margin-top:6px">Clique num dia para ver os horários. ${gestor ? 'Clique duas vezes para adicionar ou corrigir.' : turno ? '' : 'Clique duas vezes para pedir ajuste.'}</div>
+    <div id="det" style="margin-top:12px"></div>
+  </div>`;
+  box.querySelector('#mp').onclick = () => calendario(box, alunoId, gestor, new Date(ref.getFullYear(), ref.getMonth() - 1, 1));
+  box.querySelector('#mn').onclick = () => calendario(box, alunoId, gestor, new Date(ref.getFullYear(), ref.getMonth() + 1, 1));
+  box.querySelectorAll('.cd').forEach(c => {
+    c.onclick = () => {
+      box.querySelectorAll('.cd').forEach(x => x.classList.remove('csel')); c.classList.add('csel');
+      const info = porDia[c.dataset.d]; const dt = new Date(c.dataset.d + 'T00:00:00');
+      box.querySelector('#det').innerHTML = `<b>${dt.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })}</b>
+        ${diasNaData(a, dt) ? ' <span class="tag">dia combinado</span>' : ''}
+        ${info ? info.regs.map(r => `<div class="small">${hora(r.ts)} · ${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'} <span class="muted">(${esc(r.origem)})</span></div>`).join('') + `<div class="small"><b>${info.semPar ? 'Sem par — não conta horas' : h1(info.horas) + 'h no dia'}</b></div>` : '<div class="muted small">Nenhum registro.</div>'}`;
+    };
+    c.ondblclick = () => gestor ? popupDia(a, c.dataset.d, porDia[c.dataset.d], () => calendario(box, alunoId, gestor, ref))
+      : (!turno && pedirAjuste(c.dataset.d, () => VIEWS.meu()));
+  });
+}
+function popupDia(a, dia, info, depois) {
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  const dt = new Date(dia + 'T00:00:00');
+  ov.innerHTML = `<div class="drawer"><button class="btn sm close" id="x">Fechar</button>
+    <h2>${dt.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}</h2><div class="muted small">${esc(a.nome)}</div>
+    <hr><h3>Registros do dia</h3>
+    ${info ? `<table><tbody>${info.regs.map(r => `<tr><td>${hora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td><td class="muted small">${esc(r.origem)}</td><td><button class="btn sm" data-c="${r.id}">Remover</button></td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro.</div>'}
+    <hr><h3>Adicionar registro</h3>
+    <form id="fa" class="row"><select name="tipo" style="width:auto"><option value="entrada">Entrada</option><option value="saida">Saída</option></select>
+      <input name="hora" type="time" required style="width:140px"><button class="btn primary">Adicionar</button></form>
+    <div class="muted small" style="margin-top:6px">${S.perfil.papel === 'lider' ? 'Líderes podem lançar e corrigir até 7 dias para trás. Datas mais antigas: peça ao NAF.' : ''} Para corrigir um horário, remova o errado e adicione o certo.</div>
+  </div>`;
+  document.body.appendChild(ov);
+  const fechar = () => ov.remove();
+  ov.querySelector('#x').onclick = fechar; ov.onclick = e => { if (e.target === ov) fechar(); };
+  ov.querySelectorAll('[data-c]').forEach(b => b.onclick = async () => {
+    const m = prompt('Motivo da remoção (fica registrado):'); if (!m) return;
+    await q(sb.rpc('cancelar_registro', { p_id: +b.dataset.c, p_motivo: m })); toast('Registro removido.'); fechar(); depois();
+  });
+  ov.querySelector('#fa').onsubmit = async e => {
+    e.preventDefault(); const f = e.target; const [hh, mm] = f.hora.value.split(':').map(Number);
+    const ts = new Date(dt); ts.setHours(hh, mm, 0, 0);
+    await q(sb.rpc('bater_ponto', { p_aluno: a.id, p_tipo: f.tipo.value, p_ts: ts.toISOString() })); toast('Registro adicionado.'); fechar(); depois();
+  };
+}
+
+// ---------- Pedidos de ajuste ----------
+VIEWS.pedidos = async () => {
+  const filtro = S.filtroPed || 'aguardando';
+  let qq = sb.from('pedidos').select('*, alunos(nome,ra)').order('criado_em', { ascending: false }).limit(300);
+  if (filtro !== 'todos') qq = qq.eq('status', filtro);
+  const peds = await q(qq);
+  const st = { aguardando: ['Aguardando', 'warn'], aprovado: ['Aprovado', 'ok'], recusado: ['Recusado', 'bad'] };
+  document.getElementById('main').innerHTML = `
+  <div class="card"><div class="row"><h2 class="grow">Pedidos de ajuste</h2>
+    <select id="fp" style="width:auto">${[['aguardando', 'Aguardando'], ['aprovado', 'Aprovados'], ['recusado', 'Recusados'], ['todos', 'Todos']].map(([k, t]) => `<option value="${k}" ${k === filtro ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    ${peds.map(p => `<div class="pend"><span class="tag ${st[p.status][1]}">${st[p.status][0]}</span>
+      <div class="grow"><div><b>${esc(p.alunos?.nome || '')}</b> <span class="muted small">RA ${esc(p.alunos?.ra || '')} · ${esc(nomeSetor(p.setor_id))}</span></div>
+        <div>Pede ${p.tipo_alvo === 'entrada' ? 'uma <b>entrada</b>' : 'uma <b>saída</b>'} em <b>${new Date(p.data + 'T00:00:00').toLocaleDateString('pt-BR')}</b> às <b>${p.horario.slice(0, 5)}</b></div>
+        <div class="muted small">Motivo: ${esc(p.motivo)} · enviado ${dataHora(p.criado_em)}${p.resposta ? ` · resposta: ${esc(p.resposta)}` : ''}</div></div>
+      ${p.status === 'aguardando' ? `<div class="row"><button class="btn sm" data-cal="${p.aluno_id}">Calendário</button><button class="btn sm bad" data-r="${p.id}">Recusar</button><button class="btn sm ok" data-ok="${p.id}">Aprovar</button></div>` : ''}
+    </div>`).join('') || '<div class="muted" style="margin-top:10px">Nenhum pedido.</div>'}
+  </div>`;
+  document.getElementById('fp').onchange = e => { S.filtroPed = e.target.value; VIEWS.pedidos(); };
+  document.querySelectorAll('[data-ok]').forEach(b => b.onclick = async () => { b.disabled = true; await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.ok, p_aprovar: true })); toast('Pedido aprovado e registro criado.'); VIEWS.pedidos(); });
+  document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => {
+    const m = prompt('Motivo da recusa (o aluno vai ver):'); if (!m) return;
+    await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.r, p_aprovar: false, p_resposta: m })); toast('Pedido recusado.'); VIEWS.pedidos();
+  });
+  document.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => { S.calAluno = b.dataset.cal; ir('calendario'); });
+};
+function pedirAjuste(dia, depois) {
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="drawer"><button class="btn sm close" id="x">Fechar</button><h2>Pedir ajuste</h2>
+    <div class="muted small">Seu líder vai analisar o pedido.</div>
+    <form id="fj"><label>Data</label><input name="data" type="date" value="${esc(dia || isoDia(new Date()))}" max="${isoDia(new Date())}" required>
+      <label>O que faltou registrar</label><select name="tipo"><option value="entrada">Entrada</option><option value="saida">Saída</option></select>
+      <label>Horário</label><input name="horario" type="time" required>
+      <label>Motivo</label><textarea name="motivo" rows="3" required placeholder="Ex.: esqueci de registrar a saída"></textarea>
+      <button class="btn primary block">Enviar pedido</button></form></div>`;
+  document.body.appendChild(ov);
+  const fechar = () => ov.remove();
+  ov.querySelector('#x').onclick = fechar; ov.onclick = e => { if (e.target === ov) fechar(); };
+  ov.querySelector('#fj').onsubmit = async e => {
+    e.preventDefault(); const f = e.target;
+    await q(sb.rpc('pedir_ajuste', { p_data: f.data.value, p_tipo: f.tipo.value, p_horario: f.horario.value, p_motivo: f.motivo.value }));
+    toast('Pedido enviado ao líder.'); fechar(); depois && depois();
+  };
+}
+
+// ---------- Exportar Excel (aba Todos + uma por setor) ----------
+async function exportarExcel(lista) {
+  if (!window.XLSX) await new Promise((ok, err) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload = ok; sc.onerror = err; document.head.appendChild(sc); });
+  const linha = s => ({ RA: s.ra, Nome: s.nome, Setor: nomeSetor(s.setor_id), Plano: s.plano || '', 'Horas/semana': +s.horas_semana,
+    'Previsto no mês': +s.meta_mes, 'Cumpridas no mês': +s.feitas_mes, 'Saldo do mês': +(+s.saldo_mes).toFixed(2), 'Saldo mês passado': +(+s.saldo_mes_ant).toFixed(2) });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lista.map(linha)), 'Todos');
+  const porSetor = {}; lista.forEach(s => (porSetor[nomeSetor(s.setor_id)] = porSetor[nomeSetor(s.setor_id)] || []).push(s));
+  const usados = new Set(['Todos']);
+  Object.keys(porSetor).sort().forEach(n => {
+    let nome = n.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31); let i = 2; while (usados.has(nome)) nome = nome.slice(0, 28) + ' ' + i++;
+    usados.add(nome); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(porSetor[n].map(linha)), nome);
+  });
+  XLSX.writeFile(wb, `atividade-educativa-${isoDia(new Date())}.xlsx`);
+}
 
 // ---------- Quiosque ----------
 function quiosque(setor) {
@@ -491,27 +762,28 @@ VIEWS.acessos = async () => {
 // ---------- Aluno: meu saldo ----------
 VIEWS.meu = async () => {
   const [s] = await q(sb.from('v_saldos').select('*'));
-  const regs = await q(sb.from('registros').select('*').eq('cancelado', false).order('ts', { ascending: false }).limit(20));
-  const setor = s && S.setores.find(x => x.id === s.setor_id);
-  document.getElementById('main').innerHTML = !s ? '<div class="card">Seu cadastro não está ativo. Procure o NAF.</div>' : `
-  <div class="card"><h2>${esc(s.nome)}</h2><div class="muted">${esc(nomeSetor(s.setor_id))} · ${esc(s.plano || '')} · ${h1(s.horas_semana)}h por semana</div>
-    ${setor && setor.modo_ponto === 'aluno' ? '<button class="btn primary block" id="bater">Registrar presença agora</button>' : ''}</div>
-  <div class="grid kpis">
-    <div class="kpi"><div class="muted small">Previsto até hoje</div><div class="v">${h1(s.meta_mes)}h</div></div>
-    <div class="kpi"><div class="muted small">Cumpridas no mês</div><div class="v">${h1(s.feitas_mes)}h</div></div>
-    <div class="kpi ${s.saldo_mes < -0.05 ? 'bad' : 'ok'}"><div class="muted small">Saldo do mês</div><div class="v">${s.saldo_mes > 0 ? '+' : ''}${h1(s.saldo_mes)}h</div></div>
-    <div class="kpi ${s.saldo_mes_ant < -0.05 ? 'bad' : 'ok'}"><div class="muted small">Mês passado</div><div class="v">${s.saldo_mes_ant > 0 ? '+' : ''}${h1(s.saldo_mes_ant)}h</div></div>
-  </div>
-  ${s.dias_sem_par ? `<div class="card" style="margin-top:16px"><span class="tag warn">Atenção</span> ${s.dias_sem_par} dia(s) com entrada sem saída (ou vice-versa) não estão contando horas. Fale com seu líder.</div>` : ''}
-  <div class="split" style="margin-top:16px">
-    <div class="card"><h2>Últimos registros</h2>${regs.length ? `<table><tbody>${regs.map(r => `<tr><td>${dataHora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro ainda.</div>'}</div>
+  if (!s) { document.getElementById('main').innerHTML = '<div class="card">Seu cadastro não está ativo. Procure o NAF.</div>'; return; }
+  S.meuAlunoId = s.aluno_id;
+  const setor = S.setores.find(x => x.id === s.setor_id) || {};
+  const peds = await q(sb.from('pedidos').select('*').order('criado_em', { ascending: false }).limit(10));
+  const st = { aguardando: ['Aguardando', 'warn'], aprovado: ['Aprovado', 'ok'], recusado: ['Recusado', 'bad'] };
+  document.getElementById('main').innerHTML = `
+  ${setor.modo_ponto === 'aluno' && !setor.turno_fixo_horas ? '<div class="card"><button class="btn primary block" style="margin:0" id="bater">Registrar presença agora</button></div>' : ''}
+  <div id="calbox"></div>
+  <div class="split">
+    <div class="card"><div class="row"><h2 class="grow">Meus pedidos de ajuste</h2>${setor.turno_fixo_horas ? '' : '<button class="btn sm primary" id="nped">+ Pedir ajuste</button>'}</div>
+      ${setor.turno_fixo_horas ? '<div class="muted small">Neste setor, os ajustes são feitos diretamente pelo líder.</div>' : ''}
+      ${peds.map(p => `<div class="pend"><span class="tag ${st[p.status][1]}">${st[p.status][0]}</span><div class="grow small">
+        ${p.tipo_alvo === 'entrada' ? 'Entrada' : 'Saída'} em ${new Date(p.data + 'T00:00:00').toLocaleDateString('pt-BR')} às ${p.horario.slice(0, 5)}
+        <div class="muted">${esc(p.motivo)}${p.resposta ? ` · Resposta: ${esc(p.resposta)}` : ''}</div></div></div>`).join('') || '<div class="muted small" style="margin-top:8px">Nenhum pedido.</div>'}</div>
     <div class="card"><h2>PIN do quiosque</h2><div class="muted small">Usado para registrar presença no computador do setor.</div>
       <div class="row" style="margin-top:8px"><input id="pin" class="grow" type="password" inputmode="numeric" maxlength="6" placeholder="4 a 6 números"><button class="btn" id="pbt">Salvar PIN</button></div>
       <hr><h2>Trocar senha</h2><div class="row"><input id="ns" class="grow" type="password" placeholder="Nova senha (mín. 8)"><button class="btn" id="nsb">Trocar</button></div></div>
   </div>`;
-  if (!s) return;
+  calendario(document.getElementById('calbox'), s.aluno_id, false);
   const b = document.getElementById('bater');
   if (b) b.onclick = async () => { b.disabled = true; const r = await q(sb.rpc('bater_ponto', { p_aluno: s.aluno_id })); toast(`${r.tipo === 'entrada' ? 'Entrada' : 'Saída'} registrada às ${hora(r.ts)}.`); VIEWS.meu(); };
+  const np = document.getElementById('nped'); if (np) np.onclick = () => pedirAjuste(null, () => VIEWS.meu());
   document.getElementById('pbt').onclick = async () => { await q(sb.rpc('definir_pin', { p_aluno: s.aluno_id, p_pin: document.getElementById('pin').value })); toast('PIN salvo.'); document.getElementById('pin').value = ''; };
   document.getElementById('nsb').onclick = async () => {
     const p = document.getElementById('ns').value; if (p.length < 8) return toast('A senha precisa de pelo menos 8 caracteres.', true);
