@@ -61,6 +61,7 @@ async function iniciar() {
     q(sb.from('planos').select('*').order('codigo')),
   ]);
   vigiarInatividade();
+  if (perfil.troca_senha) return telaTrocaSenha();
   if (perfil.papel === 'naf') return ir('painel');
   if (perfil.papel === 'lider') return ir('ponto');
   return ir('meu');
@@ -90,9 +91,44 @@ function telaLogin(msg = '') {
   };
 }
 
+function telaTrocaSenha() {
+  $app.innerHTML = `
+  <div class="center"><form class="login" id="f">
+    <div class="logo">AE</div><h1>Crie sua senha</h1>
+    <div class="muted small">No primeiro acesso, troque a senha que você recebeu do NAF.</div>
+    <label for="n1">Nova senha (mínimo 8 caracteres)</label><input id="n1" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="n2">Repita a nova senha</label><input id="n2" type="password" autocomplete="new-password" minlength="8" required>
+    <button class="btn primary block" id="b">Salvar e entrar</button><div class="err" id="e"></div>
+  </form></div>`;
+  document.getElementById('f').onsubmit = async ev => {
+    ev.preventDefault();
+    const a = document.getElementById('n1').value, b = document.getElementById('n2').value, e = document.getElementById('e');
+    if (a.length < 8) return (e.textContent = 'A senha precisa ter pelo menos 8 caracteres.');
+    if (a !== b) return (e.textContent = 'As senhas não conferem.');
+    const { error } = await sb.auth.updateUser({ password: a });
+    if (error) return (e.textContent = error.message.includes('different') ? 'Escolha uma senha diferente da atual.' : error.message);
+    await q(sb.rpc('marcar_senha_trocada'));
+    S.perfil.troca_senha = false; toast('Senha criada.'); iniciar();
+  };
+}
+
+// ---------- gestão de acessos (Edge Function, só NAF) ----------
+async function adminFn(acao, corpo = {}) {
+  const { data, error } = await sb.functions.invoke('admin-usuarios', { body: { acao, ...corpo } });
+  let msg = data?.erro;
+  if (error && !msg) { try { msg = (await error.context.json()).erro; } catch { msg = error.message; } }
+  if (msg) { toast(msg, true); throw new Error(msg); }
+  return data;
+}
+function senhaSugerida() {
+  const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const r = crypto.getRandomValues(new Uint32Array(10));
+  return Array.from(r, n => c[n % c.length]).join('');
+}
+
 // ---------- casca ----------
 const MENUS = {
-  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['setores', 'Setores']],
+  naf: [['painel', 'Painel'], ['alunos', 'Alunos'], ['ponto', 'Registrar presença'], ['setores', 'Setores'], ['acessos', 'Acessos']],
   lider: [['ponto', 'Registrar presença'], ['alunos', 'Meus alunos']],
   aluno: [['meu', 'Meu saldo']],
 };
@@ -235,6 +271,7 @@ async function abrirAluno(id) {
       <div class="row"><select id="tps" class="grow">${optsSetor('', 'Novo setor…')}</select><button class="btn" id="tbt">Transferir</button></div>
       <input id="tmo" placeholder="Motivo (opcional)" style="margin-top:8px">
       ${trans.length ? `<div class="muted small" style="margin-top:8px">${trans.map(t => `${dataHora(t.em)}: ${esc(nomeSetor(t.de_setor))} → ${esc(nomeSetor(t.para_setor))}`).join('<br>')}</div>` : ''}
+      <hr><h3>Acesso do aluno</h3><div id="acesso" class="muted small">Verificando…</div>
       <hr><h3>PIN do quiosque</h3><div class="row"><input id="pin" class="grow" inputmode="numeric" maxlength="6" placeholder="4 a 6 números"><button class="btn" id="pbt">Definir PIN</button></div>` : ''}
     ${id ? `<hr><h3>Últimos registros</h3>${regs.length ? `<table><tbody>${regs.map(r => `<tr><td>${dataHora(r.ts)}</td><td>${r.tipo === 'entrada' ? '▶ Entrada' : '■ Saída'}</td><td class="muted small">${esc(r.origem)}</td><td>${r.cancelado ? '<span class="tag bad">cancelado</span>' : `<button class="btn sm" data-c="${r.id}">Cancelar</button>`}</td></tr>`).join('')}</tbody></table>` : '<div class="muted">Nenhum registro.</div>'}` : ''}
   </div>`;
@@ -258,6 +295,20 @@ async function abrirAluno(id) {
     await q(sb.rpc('transferir_aluno', { p_aluno: id, p_para: +para, p_motivo: ov.querySelector('#tmo').value || null }));
     toast('Aluno transferido.'); fechar(); ir(S.view);
   };
+  const acesso = ov.querySelector('#acesso');
+  if (acesso) {
+    const conta = (await q(sb.from('perfis').select('user_id,ativo,troca_senha').eq('aluno_id', id)))[0];
+    acesso.innerHTML = conta
+      ? `<div>Login: <b>RA ${esc(a.ra)}</b> · ${conta.ativo ? '<span class="tag ok">ativo</span>' : '<span class="tag bad">desativado</span>'} ${conta.troca_senha ? '<span class="tag warn">ainda não trocou a senha</span>' : ''}</div>
+         <div class="row" style="margin-top:8px"><input id="ns" class="grow" value="${senhaSugerida()}"><button class="btn" id="rs">Resetar senha</button>
+         <button class="btn ${conta.ativo ? 'bad' : 'ok'}" id="at">${conta.ativo ? 'Desativar' : 'Reativar'}</button></div>`
+      : `<div>Este aluno ainda não tem login.</div><div class="row" style="margin-top:8px"><input id="ns" class="grow" value="${senhaSugerida()}"><button class="btn primary" id="ca">Criar acesso</button></div>
+         <div style="margin-top:6px">Ele entra com o <b>RA</b> e essa senha inicial, e cria a própria senha no primeiro acesso.</div>`;
+    const ns = () => ov.querySelector('#ns').value;
+    const ca = ov.querySelector('#ca'); if (ca) ca.onclick = async () => { ca.disabled = true; try { await adminFn('criar_login_aluno', { aluno_id: id, senha: ns() }); toast(`Acesso criado. Login: RA ${a.ra} · senha inicial: ${ns()}`); fechar(); abrirAluno(id); } catch { ca.disabled = false; } };
+    const rs = ov.querySelector('#rs'); if (rs) rs.onclick = async () => { await adminFn('resetar_senha', { user_id: conta.user_id, senha: ns() }); toast(`Senha resetada. Nova senha inicial: ${ns()}`); };
+    const at = ov.querySelector('#at'); if (at) at.onclick = async () => { await adminFn('definir_ativo', { user_id: conta.user_id, ativo: !conta.ativo }); toast(conta.ativo ? 'Acesso desativado.' : 'Acesso reativado.'); fechar(); abrirAluno(id); };
+  }
   const pbt = ov.querySelector('#pbt');
   if (pbt) pbt.onclick = async () => { await q(sb.rpc('definir_pin', { p_aluno: id, p_pin: ov.querySelector('#pin').value })); toast('PIN definido.'); ov.querySelector('#pin').value = ''; };
   ov.querySelectorAll('[data-c]').forEach(b => b.onclick = async () => {
@@ -380,6 +431,60 @@ VIEWS.setores = async () => {
     const turno = prompt('Turno fixo em horas (vazio = sem turno fixo):', s.turno_fixo_horas ?? ''); if (turno === null) return;
     await q(sb.from('setores').update({ nome: nome.trim(), turno_fixo_horas: turno === '' ? null : +turno }).eq('id', s.id));
     S.setores = await q(sb.from('setores').select('*').order('nome')); toast('Setor atualizado.'); VIEWS.setores();
+  });
+};
+
+// ---------- Acessos: líderes e NAF ----------
+VIEWS.acessos = async () => {
+  const { contas } = await adminFn('listar_contas');
+  const ms = (sel = []) => `<select name="setores" multiple size="8" style="height:auto">${setoresOrdenados().map(s => `<option value="${s.id}" ${sel.includes(s.id) ? 'selected' : ''}>${esc(nomeSetor(s.id))}</option>`).join('')}</select>`;
+  document.getElementById('main').innerHTML = `
+  <div class="card"><h2>Novo acesso de líder ou NAF</h2>
+    <form id="fl"><div class="fields">
+      <div><label>Nome</label><input name="nome" required></div>
+      <div><label>E-mail</label><input name="email" type="email" required></div>
+      <div><label>Senha inicial</label><input name="senha" value="${senhaSugerida()}" required minlength="8"></div>
+      <div><label>Papel</label><select name="papel"><option value="lider">Líder de setor</option><option value="naf">NAF (vê tudo)</option></select></div>
+      <div class="full"><label>Setores que lidera <span class="muted">(Ctrl+clique para vários; subsetores entram junto)</span></label>${ms()}</div>
+    </div><button class="btn primary block">Criar acesso</button></form>
+    <div class="muted small" style="margin-top:8px">Passe o e-mail e a senha inicial para a pessoa. No primeiro acesso ela cria a própria senha.</div></div>
+  <div class="card scroll"><h2>Contas</h2><table><thead><tr><th>Nome</th><th>Papel</th><th class="hide-m">Setores</th><th class="hide-m">Último acesso</th><th></th></tr></thead><tbody>
+    ${contas.map(c => `<tr><td>${esc(c.nome)}<div class="muted small">${esc(c.email)}</div></td>
+      <td><span class="tag">${c.papel.toUpperCase()}</span> ${c.ativo ? '' : '<span class="tag bad">desativado</span>'}</td>
+      <td class="hide-m small">${c.papel === 'naf' ? 'Todos' : c.setores.map(id => esc(nomeSetor(id))).join(', ') || '<span class="tag warn">nenhum</span>'}</td>
+      <td class="hide-m small">${c.ultimo_acesso ? dataHora(c.ultimo_acesso) : '—'}</td>
+      <td><div class="row">${c.papel === 'lider' ? `<button class="btn sm" data-es="${c.user_id}">Setores</button>` : ''}
+        <button class="btn sm" data-rs="${c.user_id}">Resetar senha</button>
+        ${c.user_id === S.perfil.user_id ? '' : `<button class="btn sm" data-at="${c.user_id}" data-v="${c.ativo ? 0 : 1}">${c.ativo ? 'Desativar' : 'Reativar'}</button>`}</div></td></tr>`).join('')}
+  </tbody></table></div>`;
+  document.getElementById('fl').onsubmit = async e => {
+    e.preventDefault(); const f = e.target;
+    const setores = Array.from(f.setores.selectedOptions, o => +o.value);
+    if (f.papel.value === 'lider' && !setores.length) return toast('Escolha ao menos um setor.', true);
+    await adminFn('criar_lider', { nome: f.nome.value, email: f.email.value, senha: f.senha.value, papel: f.papel.value, setores: f.papel.value === 'naf' ? [0] : setores });
+    toast(`Acesso criado para ${f.email.value}. Senha inicial: ${f.senha.value}`); VIEWS.acessos();
+  };
+  document.querySelectorAll('[data-rs]').forEach(b => b.onclick = async () => {
+    const s = prompt('Nova senha inicial (mínimo 8 caracteres):', senhaSugerida()); if (!s) return;
+    await adminFn('resetar_senha', { user_id: b.dataset.rs, senha: s }); toast(`Senha resetada. Nova senha inicial: ${s}`);
+  });
+  document.querySelectorAll('[data-at]').forEach(b => b.onclick = async () => {
+    await adminFn('definir_ativo', { user_id: b.dataset.at, ativo: b.dataset.v === '1' }); toast('Conta atualizada.'); VIEWS.acessos();
+  });
+  document.querySelectorAll('[data-es]').forEach(b => b.onclick = () => {
+    const c = contas.find(x => x.user_id === b.dataset.es);
+    const ov = document.createElement('div'); ov.className = 'overlay';
+    ov.innerHTML = `<div class="drawer"><button class="btn sm close" id="x">Fechar</button><h2>Setores de ${esc(c.nome)}</h2>
+      <form id="fe"><label>Ctrl+clique para marcar vários</label>${ms(c.setores).replace('size="8"', 'size="16"')}<button class="btn primary block">Salvar</button></form></div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#x').onclick = () => ov.remove(); ov.onclick = e => { if (e.target === ov) ov.remove(); };
+    ov.querySelector('#fe').onsubmit = async e => {
+      e.preventDefault(); const novos = Array.from(e.target.setores.selectedOptions, o => +o.value);
+      const tirar = c.setores.filter(s => !novos.includes(s)), por = novos.filter(s => !c.setores.includes(s));
+      if (tirar.length) await q(sb.from('lideres_setor').delete().eq('user_id', c.user_id).in('setor_id', tirar));
+      if (por.length) await q(sb.from('lideres_setor').insert(por.map(s => ({ user_id: c.user_id, setor_id: s }))));
+      toast('Setores atualizados.'); ov.remove(); VIEWS.acessos();
+    };
   });
 };
 
