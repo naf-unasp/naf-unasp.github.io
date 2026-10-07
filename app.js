@@ -520,7 +520,8 @@ VIEWS.ponto = async () => {
   ]);
   const ult = {}; regs.forEach(r => (ult[r.aluno_id] = r));
   const sal = {}; saldos.forEach(s => (sal[s.aluno_id] = s.saldo_mes));
-  const turno = setor.turno_fixo_horas;
+  // turno fixo vale quando o líder registra ou no quiosque; com 'aluno', vale entrada/saída
+  const turno = setor.modo_ponto !== 'aluno' ? setor.turno_fixo_horas : null;
   const sel = new Set(); let modoLote = false;
   const modos = { lider: 'O líder registra a presença', aluno: 'Cada aluno registra no próprio login', quiosque: 'Computador do setor (RA + PIN)' };
   document.getElementById('main').innerHTML = `
@@ -530,13 +531,13 @@ VIEWS.ponto = async () => {
       <div class="grow"><label>Como este setor registra a presença</label><select id="modo">${Object.entries(modos).map(([k, t]) => `<option value="${k}" ${setor.modo_ponto === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     </div>
     ${setor.modo_ponto === 'quiosque' ? '<button class="btn primary block" id="kq">Abrir modo quiosque neste computador</button>' : ''}
-    ${setor.modo_ponto === 'aluno' ? '<div class="muted small" style="margin-top:10px">Os alunos registram a presença no próprio login. Você ainda pode registrar por eles abaixo.</div>' : ''}
+    ${setor.modo_ponto === 'aluno' ? '<div class="muted small" style="margin-top:10px">Os alunos registram entrada e saída no próprio login. Você ainda pode registrar por eles abaixo.</div>' : ''}
   </div>
   <div class="card"><div class="row"><h2 class="grow">${esc(setor.nome)} · ${alunos.length} aluno(s)</h2>
     <input id="bp" placeholder="Buscar" style="width:180px"><button class="btn" id="lote">Selecionar vários</button></div>
     <div id="barra" class="row" style="margin-top:10px;display:none;background:#eef2f7;padding:10px;border-radius:10px">
       <b id="nsel">0 selecionado(s)</b><button class="btn sm" id="todos">Marcar todos</button><span class="grow"></span>
-      <button class="btn sm ok" id="le">Registrar entrada</button><button class="btn sm bad" id="ls">Registrar saída</button>${turno ? `<button class="btn sm primary" id="lt">+${h1(turno)}h turno</button>` : ''}
+      ${turno ? `<button class="btn sm primary" id="lt">+${h1(turno)}h turno</button>` : '<button class="btn sm ok" id="le">Registrar entrada</button><button class="btn sm bad" id="ls">Registrar saída</button>'}
     </div>
     <div class="alunos-ponto" id="lap" style="margin-top:12px"></div></div>`;
   const render = () => {
@@ -546,8 +547,8 @@ VIEWS.ponto = async () => {
       return `<div class="ap ${dentro ? 'dentro' : ''}" ${modoLote ? `data-s="${a.id}" style="cursor:pointer"` : ''}>
         <div class="row" style="margin:0">${modoLote ? `<input type="checkbox" style="width:auto" ${sel.has(a.id) ? 'checked' : ''}>` : ''}<div class="n grow">${esc(a.nome)}</div></div>
         <div class="muted small">RA ${esc(a.ra)}${u ? ` · ${u.tipo === 'entrada' ? 'entrou' : 'saiu'} às ${hora(u.ts)}` : ''} · mês ${sinal(sal[a.id])}</div>
-        ${modoLote ? '' : `<div class="row"><button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>
-          ${turno ? `<button class="btn sm" data-t="${a.id}">+${h1(turno)}h turno</button>` : ''}
+        ${modoLote ? '' : `<div class="row">${turno ? `<button class="btn sm primary" data-t="${a.id}">+${h1(turno)}h turno</button>`
+          : `<button class="btn sm ${dentro ? 'bad' : 'ok'}" data-p="${a.id}">${dentro ? 'Registrar saída' : 'Registrar entrada'}</button>`}
           <button class="btn sm" data-cal="${a.id}">Calendário</button></div>`}</div>`;
     }).join('') || '<div class="muted">Nenhum aluno.</div>';
     document.getElementById('nsel').textContent = `${sel.size} selecionado(s)`;
@@ -915,7 +916,7 @@ function quiosque(setor) {
     const { data, error } = await sb.rpc('bater_ponto_quiosque', { p_setor: setor.id, p_ra: document.getElementById('kra').value, p_pin: document.getElementById('kpin').value });
     document.getElementById('kra').value = ''; document.getElementById('kpin').value = ''; document.getElementById('kra').focus();
     if (error || !data.ok) { m.className = 'msg bad'; m.textContent = error ? error.message : data.erro; }
-    else { m.className = 'msg ok'; m.textContent = `${data.tipo === 'entrada' ? 'Entrada' : 'Saída'} registrada — ${data.nome.split(' ')[0]}, ${hora(data.ts)}`; }
+    else { m.className = 'msg ok'; m.textContent = data.tipo === 'turno' ? `Turno de ${h1(data.horas)}h registrado — ${data.nome.split(' ')[0]}` : `${data.tipo === 'entrada' ? 'Entrada' : 'Saída'} registrada — ${data.nome.split(' ')[0]}, ${hora(data.ts)}`; }
     clearTimeout(m._t); m._t = setTimeout(() => (m.textContent = ''), 6000);
   };
   document.getElementById('ks').onclick = () => {
