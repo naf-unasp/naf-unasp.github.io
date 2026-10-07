@@ -666,27 +666,77 @@ function popupDia(a, dia, info, depois) {
 // ---------- Pedidos de ajuste ----------
 VIEWS.pedidos = async () => {
   const filtro = S.filtroPed || 'aguardando';
-  let qq = sb.from('pedidos').select('*, alunos(nome,ra)').order('criado_em', { ascending: false }).limit(300);
+  let qq = sb.from('pedidos').select('*, alunos(nome,ra)').order('criado_em', { ascending: filtro === 'aguardando' }).limit(1000);
   if (filtro !== 'todos') qq = qq.eq('status', filtro);
   const peds = await q(qq);
   const st = { aguardando: ['Aguardando', 'warn'], aprovado: ['Aprovado', 'ok'], recusado: ['Recusado', 'bad'] };
+  const porSetor = {}; peds.forEach(p => (porSetor[p.setor_id] = (porSetor[p.setor_id] || 0) + 1));
+  const setoresCom = Object.keys(porSetor).map(Number).sort((a, b) => porSetor[b] - porSetor[a]);
+  const POR_PAG = 50; let pag = 0; const sel = new Set();
+  const dataBR = d => new Date(d + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
   document.getElementById('main').innerHTML = `
-  <div class="card"><div class="row"><h2 class="grow">Pedidos de ajuste</h2>
-    <select id="fp" style="width:auto">${[['aguardando', 'Aguardando'], ['aprovado', 'Aprovados'], ['recusado', 'Recusados'], ['todos', 'Todos']].map(([k, t]) => `<option value="${k}" ${k === filtro ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    ${peds.map(p => `<div class="pend"><span class="tag ${st[p.status][1]}">${st[p.status][0]}</span>
-      <div class="grow"><div><b>${esc(p.alunos?.nome || '')}</b> <span class="muted small">RA ${esc(p.alunos?.ra || '')} · ${esc(nomeSetor(p.setor_id))}</span></div>
-        <div>Pede ${p.tipo_alvo === 'entrada' ? 'uma <b>entrada</b>' : 'uma <b>saída</b>'} em <b>${new Date(p.data + 'T00:00:00').toLocaleDateString('pt-BR')}</b> às <b>${p.horario.slice(0, 5)}</b></div>
-        <div class="muted small">Motivo: ${esc(p.motivo)} · enviado ${dataHora(p.criado_em)}${p.resposta ? ` · resposta: ${esc(p.resposta)}` : ''}</div></div>
-      ${p.status === 'aguardando' ? `<div class="row"><button class="btn sm" data-cal="${p.aluno_id}">Calendário</button><button class="btn sm bad" data-r="${p.id}">Recusar</button><button class="btn sm ok" data-ok="${p.id}">Aprovar</button></div>` : ''}
-    </div>`).join('') || '<div class="muted" style="margin-top:10px">Nenhum pedido.</div>'}
+  <div class="card">
+    <div class="row"><h2 class="grow">Pedidos de ajuste <span class="muted small" id="tot"></span></h2>
+      <select id="fp" style="width:auto">${[['aguardando', 'Aguardando'], ['aprovado', 'Aprovados'], ['recusado', 'Recusados'], ['todos', 'Todos']].map(([k, t]) => `<option value="${k}" ${k === filtro ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    ${setoresCom.length > 1 ? `<div class="row" style="margin-top:8px;gap:6px">${setoresCom.slice(0, 12).map(id => `<button class="btn sm" data-fs="${id}">${esc(nomeSetor(id))} <span class="tag">${porSetor[id]}</span></button>`).join('')}</div>` : ''}
+    <div class="row" style="margin-top:8px">
+      <input class="grow" id="pb" placeholder="Buscar por nome ou RA">
+      <select id="ps" style="width:auto;max-width:260px"><option value="">Todos os setores</option>${setoresCom.map(id => `<option value="${id}">${esc(nomeSetor(id))} (${porSetor[id]})</option>`).join('')}</select>
+    </div>
+    ${filtro === 'aguardando' ? `<div id="barra" class="row" style="margin-top:10px;background:#eef2f7;padding:8px 10px;border-radius:10px;display:none">
+      <b id="nsel"></b><span class="grow"></span><button class="btn sm bad" id="lr">Recusar selecionados</button><button class="btn sm ok" id="la">Aprovar selecionados</button></div>` : ''}
+    <div class="scroll" style="margin-top:10px"><table><thead><tr>
+      ${filtro === 'aguardando' ? '<th style="width:28px"><input type="checkbox" id="tds" style="width:auto"></th>' : ''}
+      <th>Aluno</th><th class="hide-m">Setor</th><th>Pedido</th><th class="hide-m">Motivo</th>${filtro === 'aguardando' ? '' : '<th>Situação</th>'}<th></th></tr></thead><tbody id="tb"></tbody></table></div>
+    <div class="row" style="margin-top:10px"><span class="muted small grow" id="info"></span><button class="btn sm" id="ant">‹ Anterior</button><button class="btn sm" id="prx">Próxima ›</button></div>
   </div>`;
+  const lista = () => {
+    const t = document.getElementById('pb').value.toLowerCase().trim(); const s = document.getElementById('ps').value;
+    return peds.filter(p => (!s || p.setor_id == s) && (!t || (p.alunos?.nome || '').toLowerCase().includes(t) || (p.alunos?.ra || '').includes(t)));
+  };
+  const render = () => {
+    const l = lista(); const pags = Math.max(1, Math.ceil(l.length / POR_PAG)); if (pag >= pags) pag = pags - 1;
+    const vis = l.slice(pag * POR_PAG, (pag + 1) * POR_PAG);
+    document.getElementById('tot').textContent = `· ${l.length}`;
+    document.getElementById('tb').innerHTML = vis.map(p => `<tr>
+      ${filtro === 'aguardando' ? `<td><input type="checkbox" data-s="${p.id}" style="width:auto" ${sel.has(p.id) ? 'checked' : ''}></td>` : ''}
+      <td><b>${esc(p.alunos?.nome || '')}</b><div class="muted small">RA ${esc(p.alunos?.ra || '')}</div></td>
+      <td class="hide-m small">${esc(nomeSetor(p.setor_id))}</td>
+      <td class="small" style="white-space:nowrap">${p.tipo_alvo === 'entrada' ? '▶ Entrada' : '■ Saída'}<div><b>${dataBR(p.data)}</b> às <b>${p.horario.slice(0, 5)}</b></div></td>
+      <td class="hide-m small muted" style="max-width:260px" title="${esc(p.motivo)}">${esc(p.motivo.length > 60 ? p.motivo.slice(0, 60) + '…' : p.motivo)}${p.resposta ? `<div>Resposta: ${esc(p.resposta)}</div>` : ''}</td>
+      ${filtro === 'aguardando' ? '' : `<td><span class="tag ${st[p.status][1]}">${st[p.status][0]}</span></td>`}
+      <td style="white-space:nowrap"><button class="btn sm" data-cal="${p.aluno_id}" title="Calendário">📅</button>
+        ${p.status === 'aguardando' ? `<button class="btn sm bad" data-r="${p.id}" title="Recusar">✕</button><button class="btn sm ok" data-ok="${p.id}" title="Aprovar">✓</button>` : ''}</td></tr>`).join('')
+      || `<tr><td colspan="7" class="muted">${filtro === 'aguardando' ? 'Nenhum pedido aguardando. 🎉' : 'Nenhum pedido.'}</td></tr>`;
+    document.getElementById('info').textContent = l.length > POR_PAG ? `Página ${pag + 1} de ${pags}` : '';
+    document.getElementById('ant').style.display = document.getElementById('prx').style.display = l.length > POR_PAG ? '' : 'none';
+    const barra = document.getElementById('barra');
+    if (barra) { barra.style.display = sel.size ? 'flex' : 'none'; document.getElementById('nsel').textContent = `${sel.size} selecionado(s)`; }
+    document.querySelectorAll('[data-s]').forEach(c => c.onchange = () => { c.checked ? sel.add(+c.dataset.s) : sel.delete(+c.dataset.s); render(); });
+    document.querySelectorAll('[data-ok]').forEach(b => b.onclick = async () => { b.disabled = true; await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.ok, p_aprovar: true })); toast('Pedido aprovado.'); VIEWS.pedidos(); });
+    document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => {
+      const m = prompt('Motivo da recusa (o aluno vai ver):'); if (!m) return;
+      await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.r, p_aprovar: false, p_resposta: m })); toast('Pedido recusado.'); VIEWS.pedidos();
+    });
+    document.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => { S.calAluno = b.dataset.cal; ir('calendario'); });
+    const tds = document.getElementById('tds'); if (tds) { tds.checked = vis.length && vis.every(p => sel.has(p.id)); tds.onchange = () => { vis.forEach(p => tds.checked ? sel.add(p.id) : sel.delete(p.id)); render(); }; }
+  };
+  const lote = async aprovar => {
+    let resp = null;
+    if (!aprovar) { resp = prompt(`Motivo da recusa para os ${sel.size} pedido(s) (os alunos vão ver):`); if (!resp) return; }
+    else if (!confirm(`Aprovar ${sel.size} pedido(s)? Os registros serão criados.`)) return;
+    let ok = 0; for (const id of sel) { try { await q(sb.rpc('resolver_pedido', { p_id: id, p_aprovar: aprovar, p_resposta: resp })); ok++; } catch {} }
+    toast(`${ok} pedido(s) ${aprovar ? 'aprovado(s)' : 'recusado(s)'}.`); VIEWS.pedidos();
+  };
   document.getElementById('fp').onchange = e => { S.filtroPed = e.target.value; VIEWS.pedidos(); };
-  document.querySelectorAll('[data-ok]').forEach(b => b.onclick = async () => { b.disabled = true; await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.ok, p_aprovar: true })); toast('Pedido aprovado e registro criado.'); VIEWS.pedidos(); });
-  document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => {
-    const m = prompt('Motivo da recusa (o aluno vai ver):'); if (!m) return;
-    await q(sb.rpc('resolver_pedido', { p_id: +b.dataset.r, p_aprovar: false, p_resposta: m })); toast('Pedido recusado.'); VIEWS.pedidos();
-  });
-  document.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => { S.calAluno = b.dataset.cal; ir('calendario'); });
+  document.getElementById('pb').oninput = () => { pag = 0; render(); };
+  document.getElementById('ps').onchange = () => { pag = 0; render(); };
+  document.querySelectorAll('[data-fs]').forEach(b => b.onclick = () => { document.getElementById('ps').value = b.dataset.fs; pag = 0; render(); });
+  document.getElementById('ant').onclick = () => { if (pag > 0) { pag--; render(); } };
+  document.getElementById('prx').onclick = () => { pag++; render(); };
+  const la = document.getElementById('la'); if (la) la.onclick = () => lote(true);
+  const lr = document.getElementById('lr'); if (lr) lr.onclick = () => lote(false);
+  render();
 };
 function pedirAjuste(dia, depois) {
   const ov = document.createElement('div'); ov.className = 'overlay';
